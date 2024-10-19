@@ -153,6 +153,7 @@
     "@anthropic-ai/sdk": "^0.26.0",
     "@anthropic-ai/vertex-sdk": "^0.4.1",
     "@google/generative-ai": "^0.18.0",
+    "@sanity/diff-match-patch": "^3.1.1",
     "@types/clone-deep": "^4.0.4",
     "@types/pdf-parse": "^1.1.4",
     "@types/turndown": "^5.0.5",
