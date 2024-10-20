@@ -7,7 +7,10 @@ import { formatResponse } from "../../core/prompts/responses"
 import { DecorationController } from "./DecorationController"
 import { diagnosticsToProblemsString, getNewDiagnostics } from "../diagnostics"
 import * as diff from "diff" // Add this import statement
-import { createPatch, applyPatchToCode } from "diff" // Add this import statement
+
+import { parsePatch, applyPatches } from "@sanity/diff-match-patch"
+
+import { makeDiff, makePatches, stringifyPatches } from '@sanity/diff-match-patch'
 
 export const DIFF_VIEW_URI_SCHEME = "cline-diff"
 
@@ -168,26 +171,22 @@ export class DiffViewProvider {
 		const updatedDocument = this.activeDiffEditor.document
 		const editedContent = updatedDocument.getText()
 
-		// Generate a patch by comparing the original content with the edited content
-		const patch = createPatch(this.originalContent ?? "", editedContent)
+		// Generate a diff between the original content and the edited content
+		const diffs = makeDiff(this.originalContent ?? "", editedContent)
 
-		// Apply the patch to the file
-		const { patchedCode, successfulPatches, failedPatches } = applyPatchToCode(this.originalContent ?? "", patch)
+		// Create patches from the diff
+		const patches = makePatches(this.originalContent ?? "", diffs)
+
+		// Stringify the patches into a textual representation
+		const patch = stringifyPatches(patches)
+
+		// Apply the patch to the active text editor
+		const { patchedCode, successfulPatches, failedPatches } = await applyPatchToCode(patch)
 
 		if (failedPatches > 0) {
 			vscode.window.showErrorMessage(`Failed to apply ${failedPatches} patch(es) to ${this.relPath}`)
 			return { newProblemsMessage: undefined, userEdits: undefined, finalContent: undefined }
 		}
-
-		// Save the patched content to the file
-		const edit = new vscode.WorkspaceEdit()
-		const fullRange = new vscode.Range(
-			updatedDocument.positionAt(0),
-			updatedDocument.positionAt(updatedDocument.getText().length)
-		)
-		edit.replace(updatedDocument.uri, fullRange, patchedCode)
-		await vscode.workspace.applyEdit(edit)
-		await updatedDocument.save()
 
 		await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false })
 		await this.closeAllDiffViews()
@@ -352,5 +351,56 @@ export class DiffViewProvider {
 		this.activeLineController = undefined
 		this.streamedLines = []
 		this.preDiagnostics = []
+	}
+}
+export async function applyPatchToCode(
+	patchStr: string
+): Promise<{ patchedCode: string; successfulPatches: number; failedPatches: number }> {
+	const activeEditor = vscode.window.activeTextEditor
+	if (!activeEditor) {
+		vscode.window.showErrorMessage("No active text editor found.")
+		return {
+			patchedCode: "",
+			successfulPatches: 0,
+			failedPatches: 0,
+		}
+	}
+
+	const originalCode = activeEditor.document.getText()
+
+	try {
+		// Parse the patch string into an array of Patch objects
+		const patches = parsePatch(patchStr)
+
+		// Apply the patches to the original code
+		const [patchedCode, results] = applyPatches(patches, originalCode)
+
+		// Analyze the patch application results
+		const successfulPatches = results.filter((result) => result === true).length
+		const failedPatches = results.length - successfulPatches
+
+		// Create a WorkspaceEdit to update the active text editor
+		const edit = new vscode.WorkspaceEdit()
+		edit.replace(activeEditor.document.uri, new vscode.Range(0, 0, activeEditor.document.lineCount, 0), patchedCode)
+
+		// Apply the edit to the active text editor
+		await vscode.workspace.applyEdit(edit)
+
+		// Save the document after applying the patch
+		await activeEditor.document.save()
+
+		return {
+			patchedCode,
+			successfulPatches,
+			failedPatches,
+		}
+	} catch (error) {
+		console.error("Error applying patch:", error)
+		vscode.window.showErrorMessage("Failed to apply patch. Please check the console for details.")
+		return {
+			patchedCode: originalCode,
+			successfulPatches: 0,
+			failedPatches: 0,
+		}
 	}
 }
