@@ -1,6 +1,7 @@
 import osName from "os-name"
 import defaultShell from "default-shell"
 import os from "os"
+import { formatRevisionXML, formatResponse } from "./responses"
 
 /**
  * Generates the system prompt for the AI assistant.
@@ -174,7 +175,7 @@ Your final result description here
 
 1. In <thinking> tags, assess what information you already have and what information you need to proceed with the task.
 2. Choose the most appropriate tool based on the task and the tool descriptions provided. Assess if you need additional information to proceed, and which of the available tools would be most effective for gathering this information. For example using the list_files tool is more effective than running a command like \`ls\` in the terminal. It's critical that you think about each available tool and use the one that best fits the current step in the task.
-3. If multiple actions are needed, use one tool at a time per message to accomplish the task iteratively, with each tool use being informed by the result of the previous tool use. Do not assume the outcome of any tool use. Each step must be informed by the previous step's result.
+3. If multiple actions are needed, use one tool at a time per message to accomplish the task iteratively, with each tool use informed by the result of the previous tool use. Do not assume the outcome of any tool use. Each step must be informed by the previous step's result.
 4. Formulate your tool use using the XML format specified for each tool.
 5. After each tool use, the user will respond with the result of that tool use. This result will provide you with the necessary information to continue your task or make further decisions. This response may include:
   - Information about whether the tool succeeded or failed, along with any reasons for failure.
@@ -190,6 +191,32 @@ It is crucial to proceed step-by-step, waiting for the user's message after each
 4. Ensure that each action builds correctly on the previous ones.
 
 By waiting for and carefully considering the user's response after each tool use, you can react accordingly and make informed decisions about how to proceed with the task. This iterative process helps ensure the overall success and accuracy of your work.
+
+# Applying Code Revisions
+
+When the user provides code revisions in XML format, you should parse the XML and apply the patches to the specified files. Here's the expected XML structure for code revisions:
+
+<rev num='[revision number]'>
+  <filepath>[file path]</filepath>
+  <before>[original code block]</before>
+  <after>[revised code block]</after>
+  <explanation>[brief explanation of the changes]</explanation>
+</rev>
+
+To apply the revisions:
+
+1. Parse the XML to extract the file path, original code block, revised code block, and explanation for each <rev> element.
+2. For each revision:
+   - Read the contents of the file at the specified file path using the read_file tool.
+   - Generate a patch using the createPrettyPatch function, passing the original code block and revised code block.
+   - Apply the patch to the file contents using the applyPatch function.
+   - Write the patched contents back to the file using the write_to_file tool.
+   - Provide a summary of the changes made, including the file path, number of successful patches, and any failed patches.
+3. After applying all revisions, attempt to complete the task by summarizing the changes made and their impact on the codebase.
+
+Remember to handle any errors that may occur during the patching process gracefully and provide clear feedback to the user.
+
+By following these guidelines and leveraging the provided XML structure and patching functions, you can effectively apply code revisions based on the user's input.
 
 ====
  

@@ -157,6 +157,7 @@
     "@types/clone-deep": "^4.0.4",
     "@types/pdf-parse": "^1.1.4",
     "@types/turndown": "^5.0.5",
+    "@types/xml2js": "^0.4.14",
     "@vscode/codicons": "^0.0.36",
     "axios": "^1.7.4",
     "cheerio": "^1.0.0",
@@ -179,6 +180,7 @@
     "strip-ansi": "^7.1.0",
     "tree-sitter-wasms": "^0.1.11",
     "turndown": "^7.2.0",
-    "web-tree-sitter": "^0.22.6"
+    "web-tree-sitter": "^0.22.6",
+    "xml2js": "^0.6.2"
   }
 }

@@ -1,6 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as path from "path"
-import * as diff from "diff"
+import { makeDiff, cleanupSemantic, makePatches, stringifyPatches, applyPatches, parsePatch } from '@sanity/diff-match-patch'
 
 /**
  * Object containing functions to format various types of responses.
@@ -141,12 +141,58 @@ Otherwise, if you have not completed the task and do not need additional informa
 	 * @param newStr - The new string to compare against.
 	 * @returns A string representing the diff in a pretty format.
 	 */
-	createPrettyPatch: (filename = "file", oldStr?: string, newStr?: string) => {
-		// strings cannot be undefined or diff throws exception
-		const patch = diff.createPatch(filename.toPosix(), oldStr || "", newStr || "")
-		const lines = patch.split("\n")
-		const prettyPatchLines = lines.slice(4)
-		return prettyPatchLines.join("\n")
+	createPrettyPatch: (filename = "file", oldStr = "", newStr = ""): string => {
+		try {
+			// Create a diff between the old and new strings
+			const diffs = makeDiff(oldStr, newStr)
+
+			// Clean up the diff for semantic representation
+			cleanupSemantic(diffs)
+
+			// Create patches from the diff
+			const patches = makePatches(oldStr, diffs)
+
+			// Stringify the patches into a pretty format
+			const prettyPatch = stringifyPatches(patches)
+
+			return prettyPatch
+		} catch (error) {
+			console.error('Error creating pretty patch:', error)
+			return ''
+		}
+	},
+
+	/**
+	 * Applies a patch to the original string.
+	 * @param originalStr - The original string.
+	 * @param patchContent - The patch content to apply.
+	 * @returns An object containing the patched string and patch application statistics.
+	 */
+	applyPatch: (originalStr = "", patchContent = ""): { patchedStr: string, successfulPatches: number, failedPatches: number } => {
+		try {
+			// Parse the patch content
+			const patches = parsePatch(patchContent)
+
+			// Apply the patches to the original string
+			const [patchedStr, results] = applyPatches(patches, originalStr)
+
+			// Analyze the patch application results
+			const successfulPatches = results.filter(result => result === true).length
+			const failedPatches = results.length - successfulPatches
+
+			return {
+				patchedStr,
+				successfulPatches,
+				failedPatches
+			}
+		} catch (error) {
+			console.error('Error applying patch:', error)
+			return {
+				patchedStr: originalStr,
+				successfulPatches: 0, 
+				failedPatches: 0
+			}
+		}
 	},
 }
 
@@ -191,3 +237,43 @@ I have completed the task...
 </attempt_completion>
 
 Always adhere to this format for all tool uses to ensure proper parsing and execution.`
+
+// Add helper function to escape XML special characters
+function escapeXML(str: string): string {
+	return str
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;')
+}
+
+/**
+ * Formats a code revision into the specified XML structure.
+ * @param revisionNumber - The revision number.
+ * @param filepath - The file path of the revised code.
+ * @param before - The original code block before revision.
+ * @param after - The revised code block after revision.
+ * @param explanation - A brief explanation of the changes made.
+ * @returns A string containing the formatted XML.
+ */
+export function formatRevisionXML(
+	revisionNumber: number,
+	filepath: string, 
+	before: string,
+	after: string,
+	explanation: string
+): string {
+	return `
+<rev num='${revisionNumber}'>
+  <filepath>${escapeXML(filepath)}</filepath>
+  <before>
+${escapeXML(before)}
+  </before>
+  <after>
+${escapeXML(after)}  
+  </after>
+  <explanation>${escapeXML(explanation)}</explanation>
+</rev>
+`.trim()
+}

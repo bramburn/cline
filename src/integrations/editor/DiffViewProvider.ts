@@ -5,11 +5,15 @@ import { createDirectoriesForFile } from "../../utils/fs"
 import { arePathsEqual } from "../../utils/path"
 import { formatResponse } from "../../core/prompts/responses"
 import { DecorationController } from "./DecorationController"
-import * as diff from "diff"
 import { diagnosticsToProblemsString, getNewDiagnostics } from "../diagnostics"
+import * as diff from "diff" // Add this import statement
 
 export const DIFF_VIEW_URI_SCHEME = "cline-diff"
 
+/**
+ * DiffViewProvider class handles the diff view and user interactions
+ * within the editor, including saving changes and updating the view.
+ */
 export class DiffViewProvider {
 	editType?: "create" | "modify"
 	isEditing = false
@@ -79,6 +83,12 @@ export class DiffViewProvider {
 		this.streamedLines = []
 	}
 
+	/**
+	 * Updates the diff view with the accumulated content from the user.
+	 * @param accumulatedContent - The content accumulated from user input.
+	 * @param isFinal - A boolean indicating if this is the final update.
+	 * @throws Will throw an error if required values are not set.
+	 */
 	async update(accumulatedContent: string, isFinal: boolean) {
 		if (!this.relPath || !this.activeLineController || !this.fadedOverlayController) {
 			throw new Error("Required values not set")
@@ -138,6 +148,13 @@ export class DiffViewProvider {
 		}
 	}
 
+	/**
+	 * Saves the changes made by the user and checks for new problems.
+	 * @returns A promise that resolves to an object containing:
+	 * - newProblemsMessage: A message indicating new problems detected.
+	 * - userEdits: A string representing the user's edits in a pretty patch format.
+	 * - finalContent: The final content after user edits.
+	 */
 	async saveChanges(): Promise<{
 		newProblemsMessage: string | undefined
 		userEdits: string | undefined
@@ -190,7 +207,8 @@ export class DiffViewProvider {
 		// just in case the new content has a mix of varying EOL characters
 		const normalizedNewContent = this.newContent.replace(/\r\n|\n/g, newContentEOL).trimEnd() + newContentEOL
 		if (normalizedEditedContent !== normalizedNewContent) {
-			// user made changes before approving edit
+			// User made changes before approving edit
+			// Generate a pretty patch using @sanity/diff-match-patch
 			const userEdits = formatResponse.createPrettyPatch(
 				this.relPath.toPosix(),
 				normalizedNewContent,
@@ -198,7 +216,7 @@ export class DiffViewProvider {
 			)
 			return { newProblemsMessage, userEdits, finalContent: normalizedEditedContent }
 		} else {
-			// no changes to cline's edits
+			// No changes to Cline's edits
 			return { newProblemsMessage, userEdits: undefined, finalContent: normalizedEditedContent }
 		}
 	}
