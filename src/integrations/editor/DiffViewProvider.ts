@@ -7,6 +7,7 @@ import { formatResponse } from "../../core/prompts/responses"
 import { DecorationController } from "./DecorationController"
 import { diagnosticsToProblemsString, getNewDiagnostics } from "../diagnostics"
 import * as diff from "diff" // Add this import statement
+import { createPatch, applyPatchToCode } from "diff" // Add this import statement
 
 export const DIFF_VIEW_URI_SCHEME = "cline-diff"
 
@@ -166,59 +167,43 @@ export class DiffViewProvider {
 		const absolutePath = path.resolve(this.cwd, this.relPath)
 		const updatedDocument = this.activeDiffEditor.document
 		const editedContent = updatedDocument.getText()
-		if (updatedDocument.isDirty) {
-			await updatedDocument.save()
+
+		// Generate a patch by comparing the original content with the edited content
+		const patch = createPatch(this.originalContent ?? "", editedContent)
+
+		// Apply the patch to the file
+		const { patchedCode, successfulPatches, failedPatches } = applyPatchToCode(this.originalContent ?? "", patch)
+
+		if (failedPatches > 0) {
+			vscode.window.showErrorMessage(`Failed to apply ${failedPatches} patch(es) to ${this.relPath}`)
+			return { newProblemsMessage: undefined, userEdits: undefined, finalContent: undefined }
 		}
+
+		// Save the patched content to the file
+		const edit = new vscode.WorkspaceEdit()
+		const fullRange = new vscode.Range(
+			updatedDocument.positionAt(0),
+			updatedDocument.positionAt(updatedDocument.getText().length)
+		)
+		edit.replace(updatedDocument.uri, fullRange, patchedCode)
+		await vscode.workspace.applyEdit(edit)
+		await updatedDocument.save()
 
 		await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false })
 		await this.closeAllDiffViews()
 
-		/*
-		Getting diagnostics before and after the file edit is a better approach than
-		automatically tracking problems in real-time. This method ensures we only
-		report new problems that are a direct result of this specific edit.
-		Since these are new problems resulting from Cline's edit, we know they're
-		directly related to the work he's doing. This eliminates the risk of Cline
-		going off-task or getting distracted by unrelated issues, which was a problem
-		with the previous auto-debug approach. Some users' machines may be slow to
-		update diagnostics, so this approach provides a good balance between automation
-		and avoiding potential issues where Cline might get stuck in loops due to
-		outdated problem information. If no new problems show up by the time the user
-		accepts the changes, they can always debug later using the '@problems' mention.
-		This way, Cline only becomes aware of new problems resulting from his edits
-		and can address them accordingly. If problems don't change immediately after
-		applying a fix, Cline won't be notified, which is generally fine since the
-		initial fix is usually correct and it may just take time for linters to catch up.
-		*/
 		const postDiagnostics = vscode.languages.getDiagnostics()
 		const newProblems = diagnosticsToProblemsString(
 			getNewDiagnostics(this.preDiagnostics, postDiagnostics),
 			[
-				vscode.DiagnosticSeverity.Error, // only including errors since warnings can be distracting (if user wants to fix warnings they can use the @problems mention)
+				vscode.DiagnosticSeverity.Error,
 			],
 			this.cwd
-		) // will be empty string if no errors
+		)
 		const newProblemsMessage =
 			newProblems.length > 0 ? `\n\nNew problems detected after saving the file:\n${newProblems}` : ""
 
-		// If the edited content has different EOL characters, we don't want to show a diff with all the EOL differences.
-		const newContentEOL = this.newContent.includes("\r\n") ? "\r\n" : "\n"
-		const normalizedEditedContent = editedContent.replace(/\r\n|\n/g, newContentEOL).trimEnd() + newContentEOL // trimEnd to fix issue where editor adds in extra new line automatically
-		// just in case the new content has a mix of varying EOL characters
-		const normalizedNewContent = this.newContent.replace(/\r\n|\n/g, newContentEOL).trimEnd() + newContentEOL
-		if (normalizedEditedContent !== normalizedNewContent) {
-			// User made changes before approving edit
-			// Generate a pretty patch using @sanity/diff-match-patch
-			const userEdits = formatResponse.createPrettyPatch(
-				this.relPath.toPosix(),
-				normalizedNewContent,
-				normalizedEditedContent
-			)
-			return { newProblemsMessage, userEdits, finalContent: normalizedEditedContent }
-		} else {
-			// No changes to Cline's edits
-			return { newProblemsMessage, userEdits: undefined, finalContent: normalizedEditedContent }
-		}
+		return { newProblemsMessage, userEdits: patch, finalContent: patchedCode }
 	}
 
 	async revertChanges(): Promise<void> {

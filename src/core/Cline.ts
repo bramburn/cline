@@ -21,6 +21,8 @@ import { ApiConfiguration } from "../shared/api"
 import { findLastIndex } from "../shared/array"
 import { combineApiRequests } from "../shared/combineApiRequests"
 import { combineCommandSequences } from "../shared/combineCommandSequences"
+import { diff_match_patch } from "diff-match-patch"
+
 import {
 	ClineApiReqCancelReason,
 	ClineApiReqInfo,
@@ -42,7 +44,8 @@ import { addCustomInstructions, SYSTEM_PROMPT } from "./prompts/system"
 import { truncateHalfConversation } from "./sliding-window"
 import { ClineProvider, GlobalFileNames } from "./webview/ClineProvider"
 import { showOmissionWarning } from "../integrations/editor/detect-omission"
-
+import { parseString } from "xml2js"
+import { promisify } from "util"
 const cwd =
 	vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -50,6 +53,7 @@ type ToolResponse = string | Array<Anthropic.TextBlockParam | Anthropic.ImageBlo
 type UserContent = Array<
 	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam
 >
+const parseXml = promisify(parseString)
 
 /**
  * Represents the Cline class that handles API interactions and manages conversation history.
@@ -904,12 +908,22 @@ export class Cline {
 				let content = block.content
 				if (content) {
 					// (have to do this for partial and complete since sending content in thinking tags to markdown renderer will automatically be removed)
+
 					// Remove end substrings of <thinking or </thinking (below xml parsing is only for opening tags)
 					// (this is done with the xml parsing below now, but keeping here for reference)
 					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?$/, "")
 					// Remove all instances of <thinking> (with optional line break after) and </thinking> (with optional line break before)
 					// - Needs to be separate since we dont want to remove the line break before the first tag
 					// - Needs to happen before the xml parsing below
+					// XML processing
+					try {
+						const result = await parseXml(content)
+						// Handle the parsed XML result
+						content = this.processXmlContent(result)
+					} catch (error) {
+						// If parsing fails, assume it's not XML and proceed with original content
+						console.warn("XML parsing failed, proceeding with original content", error)
+					}
 					content = content.replace(/<thinking>\s?/g, "")
 					content = content.replace(/\s?<\/thinking>/g, "")
 
@@ -2143,5 +2157,14 @@ export class Cline {
 		}
 
 		return `<environment_details>\n${details.trim()}\n</environment_details>`
+	}
+	private processXmlContent(xmlResult: any): string {
+		// This function should process the parsed XML and return a string
+		// Implement your XML processing logic here
+		// For example:
+		if (xmlResult.root && xmlResult.root.content) {
+			return xmlResult.root.content.join("\n")
+		}
+		return JSON.stringify(xmlResult, null, 2) // Fallback to stringifying the entire result
 	}
 }

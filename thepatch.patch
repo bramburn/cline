@@ -1,0 +1,53 @@
+--- src/core/Cline.ts
++++ src/core/Cline.ts
+@@ -1,5 +1,7 @@
+ import { Anthropic } from "@anthropic-ai/sdk"
+ import cloneDeep from "clone-deep"
++import { parseString } from 'xml2js'
++import { promisify } from 'util'
+ import delay from "delay"
+ import fs from "fs/promises"
+ import os from "os"
+@@ -53,6 +55,8 @@ type UserContent = Array<
+ 	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam
+ >
+ 
++const parseXml = promisify(parseString);
++
+ /**
+  * Represents the Cline class that handles API interactions and manages conversation history.
+  */
+@@ -602,6 +606,17 @@ export class Cline {
+ 				let content = block.content
+ 				if (content) {
+ 					// (have to do this for partial and complete since sending content in thinking tags to markdown renderer will automatically be removed)
++					// XML processing
++					try {
++						const result = await parseXml(content);
++						// Handle the parsed XML result
++						content = this.processXmlContent(result);
++					} catch (error) {
++						// If parsing fails, assume it's not XML and proceed with original content
++						console.warn("XML parsing failed, proceeding with original content", error);
++					}
++
++					// Existing content processing
+ 					// Remove end substrings of <thinking or </thinking (below xml parsing is only for opening tags)
+ 					// (this is done with the xml parsing below now, but keeping here for reference)
+ 					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?$/, "")
+@@ -1190,4 +1205,15 @@ export class Cline {
+ 
+ 		return `<environment_details>\n${details.trim()}\n</environment_details>`
+ 	}
++
++	private processXmlContent(xmlResult: any): string {
++		// This function should process the parsed XML and return a string
++		// Implement your XML processing logic here
++		// For example:
++		if (xmlResult.root && xmlResult.root.content) {
++			return xmlResult.root.content.join('\n');
++		}
++		return JSON.stringify(xmlResult, null, 2); // Fallback to stringifying the entire result
++	}
++
+ }
