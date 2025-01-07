@@ -80,44 +80,71 @@ type UserContent = Array<
 >
 
 export class Cline {
-	readonly taskId: string
-	api: ApiHandler
-	private terminalManager: TerminalManager
-	private urlContentFetcher: UrlContentFetcher
-	private browserSession: BrowserSession
-	private didEditFile: boolean = false
-	customInstructions?: string
-	autoApprovalSettings: AutoApprovalSettings
-	apiConversationHistory: Anthropic.MessageParam[] = []
-	clineMessages: ClineMessage[] = []
-	private askResponse?: ClineAskResponse
-	private askResponseText?: string
-	private askResponseImages?: string[]
-	private lastMessageTs?: number
-	private consecutiveAutoApprovedRequestsCount: number = 0
-	private consecutiveMistakeCount: number = 0
-	private providerRef: WeakRef<ClineProvider>
-	private abort: boolean = false
-	didFinishAbortingStream = false
-	abandoned = false
-	private diffViewProvider: DiffViewProvider
-	private checkpointTracker?: CheckpointTracker
-	checkpointTrackerErrorMessage?: string
-	conversationHistoryDeletedRange?: [number, number]
-	isInitialized = false
-	private toolCallOptimizationAgent: ToolCallOptimizationAgent
-	private apiRequestService: ApiRequestService
-	private abortSubject = new Subject<boolean>()
-	private messageService: MessageService
-	private conversationStateService: ConversationStateService
-	private conversationHistoryService: ConversationHistoryService
-	private clineStateService: ClineStateService
-	private userMessageContentReady: boolean = false
-	private didCompleteReadingStream: boolean = false
-	private assistantMessageContent: AssistantMessageContent[] = []
-	private userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = []
+	readonly taskId: string;
+	private readonly api: ApiHandler;
+	private readonly terminalManager: TerminalManager;
+	private readonly urlContentFetcher: UrlContentFetcher;
+	private readonly browserSession: BrowserSession;
+	private readonly diffViewProvider: DiffViewProvider;
+	private readonly toolCallOptimizationAgent: ToolCallOptimizationAgent;
+	private readonly apiRequestService: ApiRequestService;
+	private readonly messageService: MessageService;
+	private readonly conversationStateService: ConversationStateService;
+	private readonly clineStateService: ClineStateService;
+	private readonly providerRef: WeakRef<ClineProvider>;
+	private readonly abortSubject: Subject<boolean>;
+	private conversationHistoryService!: ConversationHistoryService;
 
-	constructor(
+	private didEditFile: boolean = false;
+	private customInstructions?: string;
+	private autoApprovalSettings: AutoApprovalSettings;
+	private apiConversationHistory: Anthropic.MessageParam[] = [];
+	private clineMessages: ClineMessage[] = [];
+	private askResponse?: ClineAskResponse;
+	private askResponseText?: string;
+	private askResponseImages?: string[];
+	private lastMessageTs?: number;
+	private consecutiveAutoApprovedRequestsCount: number = 0;
+	private consecutiveMistakeCount: number = 0;
+	private _abort: boolean = false;
+	private didFinishAbortingStream = false;
+	private abandoned = false;
+	private checkpointTracker?: CheckpointTracker;
+	private checkpointTrackerErrorMessage?: string;
+	private conversationHistoryDeletedRange?: [number, number];
+	private isInitialized = false;
+	private userMessageContentReady: boolean = false;
+	private didCompleteReadingStream: boolean = false;
+	private assistantMessageContent: AssistantMessageContent[] = [];
+	private userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = [];
+	
+	private readonly task?: string;
+	private readonly images?: string[];
+	private readonly historyItem?: HistoryItem;
+
+	static async create(
+		provider: ClineProvider,
+		apiConfiguration: ApiConfiguration,
+		autoApprovalSettings: AutoApprovalSettings,
+		customInstructions?: string,
+		task?: string,
+		images?: string[],
+		historyItem?: HistoryItem,
+	): Promise<Cline> {
+		const instance = new Cline(
+			provider,
+			apiConfiguration,
+			autoApprovalSettings,
+			customInstructions,
+			task,
+			images,
+			historyItem
+		);
+		await instance.initialize();
+		return instance;
+	}
+
+	private constructor(
 		provider: ClineProvider,
 		apiConfiguration: ApiConfiguration,
 		autoApprovalSettings: AutoApprovalSettings,
@@ -126,48 +153,52 @@ export class Cline {
 		images?: string[],
 		historyItem?: HistoryItem,
 	) {
-		this.messageService = new MessageService();
-		this.conversationStateService = new ConversationStateService(historyItem);
-		this.providerRef = new WeakRef(provider)
-		this.api = buildApiHandler(apiConfiguration)
-		this.terminalManager = new TerminalManager()
-		this.urlContentFetcher = new UrlContentFetcher(provider.context)
-		this.browserSession = new BrowserSession(provider.context)
-		this.diffViewProvider = new DiffViewProvider(cwd)
-		this.customInstructions = customInstructions
-		this.autoApprovalSettings = autoApprovalSettings
+		this.providerRef = new WeakRef(provider);
+		this.api = buildApiHandler(apiConfiguration);
+		this.terminalManager = new TerminalManager();
+		this.urlContentFetcher = new UrlContentFetcher(provider.context);
+		this.browserSession = new BrowserSession(provider.context);
+		this.diffViewProvider = new DiffViewProvider(cwd);
+		this.customInstructions = customInstructions;
+		this.autoApprovalSettings = autoApprovalSettings;
 		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
 		this.apiRequestService = new ApiRequestService();
-		if (historyItem) {
-			this.taskId = historyItem.id
-			this.conversationHistoryDeletedRange = historyItem.conversationHistoryDeletedRange
-			this.resumeTaskFromHistory()
-		} else if (task || images) {
-			this.taskId = Date.now().toString()
-			this.startTask(task, images)
-		} else {
-			throw new Error("Either historyItem or task/images must be provided")
+		this.messageService = new MessageService();
+		this.conversationStateService = new ConversationStateService(historyItem);
+		this.clineStateService = new ClineStateService();
+		this.abortSubject = new Subject<boolean>();
+		this.taskId = historyItem?.id ?? Date.now().toString();
+		this.task = task;
+		this.images = images;
+		this.historyItem = historyItem;
+	}
+
+	private async initialize(): Promise<void> {
+		const taskDir = await this.ensureTaskDirectoryExists();
+		const initialHistory = this.historyItem ? await this.getSavedApiConversationHistory() : [];
+		
+		this.conversationHistoryService = new ConversationHistoryService({ 
+			taskDir,
+			initialHistory
+		});
+
+		if (this.historyItem) {
+			this.conversationHistoryDeletedRange = this.historyItem.conversationHistoryDeletedRange;
+			await this.resumeTaskFromHistory();
+		} else if (this.task || this.images) {
+			await this.startTask(this.task, this.images);
 		}
 
-		// Initialize the conversation history service asynchronously
-		this.initializeConversationHistoryService(historyItem);
-
-		// Initialize ConversationStateService
-		this.conversationStateService = new ConversationStateService(historyItem);
-
-		// Initialize ClineStateService
-		this.clineStateService = new ClineStateService();
-
-		// Optional: Subscribe to state changes if needed
+		// Subscribe to state changes
 		this.clineStateService.isStreaming$.subscribe(isStreaming => {
-			// You can add any global state change handling here if required
 			this.isStreaming = isStreaming;
 		});
 
 		this.clineStateService.abort$.subscribe(abort => {
-			this.abort = abort;
+			this._abort = abort;
 		});
 	}
+
 	// remove refactor
 	// Add this new private method
 	private async initializeConversationHistoryService(historyItem?: HistoryItem) {
@@ -567,7 +598,7 @@ export class Cline {
 		images?: string[]
 	}> {
 		// If this Cline instance was aborted by the provider, then the only thing keeping us alive is a promise still running in the background, in which case we don't want to send its result to the webview as it is attached to a new instance of Cline now. So we can safely ignore the result of any active promises, and this class will be deallocated. (Although we set Cline = undefined in provider, that simply removes the reference to this instance, but the instance is still alive until this promise resolves or rejects.)
-		if (this.abort) {
+		if (this._abort) {
 			throw new Error("Cline instance aborted")
 		}
 
@@ -610,7 +641,7 @@ export class Cline {
 	}
 
 	async say(type: ClineSay, text?: string, images?: string[], partial?: boolean): Promise<undefined> {
-		if (this.abort) {
+		if (this._abort) {
 			throw new Error("Cline instance aborted")
 		}
 
@@ -909,7 +940,7 @@ export class Cline {
 	private async initiateTaskLoop(userContent: UserContent, isNewTask: boolean): Promise<void> {
 		let nextUserContent = userContent
 		let includeFileDetails = true
-		while (!this.abort) {
+		while (!this._abort) {
 			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails, isNewTask)
 			includeFileDetails = false // we only need file details the first time
 
@@ -938,7 +969,7 @@ export class Cline {
 	}
 
 	async abortTask() {
-		this.abort = true // will stop any autonomously running promises
+		this._abort = true // will stop any autonomously running promises
 		this.terminalManager.disposeAll()
 		this.urlContentFetcher.closeBrowser()
 		this.browserSession.closeBrowser()
@@ -1193,7 +1224,7 @@ export class Cline {
 
 	async presentAssistantMessage() {
 		try {
-			if (this.abort) {
+			if (this._abort) {
 				throw new Error("Cline instance aborted")
 			}
 
@@ -1221,7 +1252,7 @@ export class Cline {
 		includeFileDetails: boolean = false,
 		isNewTask: boolean = false,
 	): Promise<boolean> {
-		if (this.abort) {
+		if (this._abort) {
 			throw new Error("Cline instance aborted")
 		}
 
@@ -1443,7 +1474,7 @@ export class Cline {
 					}
 				}
 			} catch (error) {
-				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
+				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this._abort)
 				if (!this.abandoned) {
 					this.abortTask() // if the stream failed, there's various states the task could be in (i.e. could have streamed some tools the user may have executed), so we just resort to replicating a cancel task
 					await abortStream("streaming_failed", error.message ?? JSON.stringify(serializeError(error), null, 2))
@@ -1458,7 +1489,7 @@ export class Cline {
 			}
 
 			// need to call here in case the stream was aborted
-			if (this.abort) {
+			if (this._abort) {
 				throw new Error("Cline instance aborted")
 			}
 
@@ -1534,13 +1565,8 @@ export class Cline {
 		}
 	}
 
-	async loadContext(userContent: UserContent, includeFileDetails: boolean = false) {
+	async loadContext(userContent: UserContent, includeFileDetails: boolean = false): Promise<[UserContent, string]> {
 		return await Promise.all([
-			// Process userContent array, which contains various block types:
-			// TextBlockParam, ImageBlockParam, ToolUseBlockParam, and ToolResultBlockParam.
-			// We need to apply parseMentions() to:
-			// 1. All TextBlockParam's text (first user message with task)
-			// 2. ToolResultBlockParam's content/context text arrays if it contains "<feedback>" (see formatToolDeniedFeedback, attemptCompletion, executeCommand, and consecutiveMistakeCount >= 3) or "<answer>" (see askFollowupQuestion), we place all user generated content in these tags so they can effectively be used as markers for when we should parse mentions)
 			Promise.all(
 				userContent.map(async (block) => {
 					if (block.type === "text") {
@@ -1577,10 +1603,10 @@ export class Cline {
 				}),
 			),
 			this.getEnvironmentDetails(includeFileDetails),
-		])
+		]) as Promise<[UserContent, string]>;
 	}
 
-	async getEnvironmentDetails(includeFileDetails: boolean = false) {
+	private async getEnvironmentDetails(includeFileDetails: boolean = false): Promise<string> {
 		let details = ""
 
 		// It could be useful for cline to know if the user went from one or no file to another between messages, so we always include this context
@@ -1611,58 +1637,30 @@ export class Cline {
 
 		const busyTerminals = this.terminalManager.getTerminals(true)
 		const inactiveTerminals = this.terminalManager.getTerminals(false)
-		// const allTerminals = [...busyTerminals, ...inactiveTerminals]
 
 		if (busyTerminals.length > 0 && this.didEditFile) {
-			//  || this.didEditFile
 			await delay(300) // delay after saving file to let terminals catch up
 		}
 
-		// let terminalWasBusy = false
 		if (busyTerminals.length > 0) {
-			// wait for terminals to cool down
-			// terminalWasBusy = allTerminals.some((t) => this.terminalManager.isProcessHot(t.id))
 			await pWaitFor(() => busyTerminals.every((t) => !this.terminalManager.isProcessHot(t.id)), {
 				interval: 100,
 				timeout: 15_000,
 			}).catch(() => {})
 		}
 
-		// we want to get diagnostics AFTER terminal cools down for a few reasons: terminal could be scaffolding a project, dev servers (compilers like webpack) will first re-compile and then send diagnostics, etc
-		/*
-		let diagnosticsDetails = ""
-		const diagnostics = await this.diagnosticsMonitor.getCurrentDiagnostics(this.didEditFile || terminalWasBusy) // if cline ran a command (ie npm install) or edited the workspace then wait a bit for updated diagnostics
-		for (const [uri, fileDiagnostics] of diagnostics) {
-			const problems = fileDiagnostics.filter((d) => d.severity === vscode.DiagnosticSeverity.Error)
-			if (problems.length > 0) {
-				diagnosticsDetails += `\n## ${path.relative(cwd, uri.fsPath)}`
-				for (const diagnostic of problems) {
-					// let severity = diagnostic.severity === vscode.DiagnosticSeverity.Error ? "Error" : "Warning"
-					const line = diagnostic.range.start.line + 1 // VSCode lines are 0-indexed
-					const source = diagnostic.source ? `[${diagnostic.source}] ` : ""
-					diagnosticsDetails += `\n- ${source}Line ${line}: ${diagnostic.message}`
-				}
-			}
-		}
-		*/
-		this.didEditFile = false // reset, this lets us know when to wait for saved files to update terminals
-
-		// waiting for updated diagnostics lets terminal output be the most up-to-date possible
 		let terminalDetails = ""
 		if (busyTerminals.length > 0) {
-			// terminals are cool, let's retrieve their output
 			terminalDetails += "\n\n# Actively Running Terminals"
 			for (const busyTerminal of busyTerminals) {
 				terminalDetails += `\n## Original command: \`${busyTerminal.lastCommand}\``
 				const newOutput = this.terminalManager.getUnretrievedOutput(busyTerminal.id)
 				if (newOutput) {
 					terminalDetails += `\n### New Output\n${newOutput}`
-				} else {
-					// details += `\n(Still running, no new output)` // don't want to show this right after running the command
 				}
 			}
 		}
-		// only show inactive terminals if there's output to show
+
 		if (inactiveTerminals.length > 0) {
 			const inactiveTerminalOutputs = new Map<number, string>()
 			for (const inactiveTerminal of inactiveTerminals) {
@@ -1675,20 +1673,13 @@ export class Cline {
 				terminalDetails += "\n\n# Inactive Terminals"
 				for (const [terminalId, newOutput] of inactiveTerminalOutputs) {
 					const inactiveTerminal = inactiveTerminals.find((t) => t.id === terminalId)
-					if (inactiveTerminal) {
+					if (inactiveTerminal?.lastCommand) {
 						terminalDetails += `\n## ${inactiveTerminal.lastCommand}`
 						terminalDetails += `\n### New Output\n${newOutput}`
 					}
 				}
 			}
 		}
-
-		// details += "\n\n# VSCode Workspace Errors"
-		// if (diagnosticsDetails) {
-		// 	details += diagnosticsDetails
-		// } else {
-		// 	details += "\n(No errors detected)"
-		// }
 
 		if (terminalDetails) {
 			details += terminalDetails
@@ -1698,7 +1689,6 @@ export class Cline {
 			details += `\n\n# Current Working Directory (${cwd.toPosix()}) Files\n`
 			const isDesktop = arePathsEqual(cwd, path.join(os.homedir(), "Desktop"))
 			if (isDesktop) {
-				// don't want to immediately access desktop since it would show permission popup
 				details += "(Desktop files not shown automatically. Use list_files to explore if needed.)"
 			} else {
 				const [files, didHitLimit] = await listFiles(cwd, true, 200)
@@ -1831,11 +1821,11 @@ export class Cline {
 		this.clineStateService.setIsStreaming(value);
 	}
 
-	get abort(): boolean {
+	get _abort(): boolean {
 		return this.clineStateService.getCurrentAbort();
 	}
 
-	set abort(value: boolean) {
+	set _abort(value: boolean) {
 		this.clineStateService.setAbort(value);
 	}
 
@@ -1853,5 +1843,14 @@ export class Cline {
 
 	set didAlreadyUseTool(value: boolean) {
 		this.clineStateService.setDidAlreadyUseTool(value);
+	}
+
+	get abort(): boolean {
+		return this._abort;
+	}
+
+	set abort(value: boolean) {
+		this._abort = value;
+		this.clineStateService.setAbort(value);
 	}
 }
