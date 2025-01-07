@@ -23,6 +23,7 @@ import { findLast, findLastIndex } from "../shared/array"
 import { AutoApprovalSettings } from "../shared/AutoApprovalSettings"
 import { combineApiRequests } from "../shared/combineApiRequests"
 import { combineCommandSequences, COMMAND_REQ_APP_STRING } from "../shared/combineCommandSequences"
+
 import {
 	BrowserAction,
 	BrowserActionResult,
@@ -63,6 +64,7 @@ import { firstValueFrom } from 'rxjs';
 import { MessageService } from '../services/MessageService';
 import { ConversationStateService } from '../services/ConversationStateService';
 import { ToolCallOptimizationAgent } from './agents/ToolCallOptimizationAgent';
+import { PatternAnalysis, ErrorReport } from '../types/ToolCallOptimization';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -1700,7 +1702,7 @@ export class Cline {
 								} satisfies ClineSayTool)
 								if (this.shouldAutoApproveTool(block.name)) {
 									this.removeLastPartialMessageIfExistsWithType("ask", "tool")
-									await this.say("tool", completeMessage, undefined, false) // need to be sending partialValue bool, since undefined has its own purpose in that the message is treated neither as a partial or completion of a partial, but as a single complete message
+									await this.say("tool", completeMessage, undefined, false);
 									this.consecutiveAutoApprovedRequestsCount++
 								} else {
 									showNotificationForApprovalIfAutoApprovalEnabled(
@@ -1713,9 +1715,17 @@ export class Cline {
 										break
 									}
 								}
-								// now execute the tool like normal
-								const content = await extractTextFromFile(absolutePath)
-								pushToolResult(content)
+								// Use the optimization agent for execution
+								const [userRejected, result] = await this.executeToolWithOptimization(
+									"read_file",
+									{ path: relPath },
+									async (params) => await extractTextFromFile(path.resolve(cwd, params.path))
+								)
+								if (userRejected) {
+									this.didRejectTool = true
+								}
+								pushToolResult(result)
+								
 								await this.saveCheckpoint()
 								break
 							}
@@ -3133,18 +3143,18 @@ export class Cline {
 		return this.conversationStateService.getMessages();
 	}
 
-	private async executeToolWithOptimization<T>(
+	private async executeToolWithOptimization<T extends string | ToolResponse>(
 		toolName: ToolUseName,
 		parameters: Record<string, string>,
 		execute: (params: Record<string, string>) => Promise<T>
-	): Promise<[boolean, string]> {
+	): Promise<[boolean, ToolResponse]> {
 		try {
 			const result = await this.toolCallOptimizationAgent.executeToolCall(
 				toolName,
 				parameters,
 				execute
 			);
-
+	
 			if (result.error) {
 				this.consecutiveMistakeCount++;
 				const errorMessage = `Error executing ${toolName}: ${result.error.message}\n\n` +
@@ -3153,112 +3163,30 @@ export class Cline {
 					).join('\n')}`;
 				return [false, formatResponse.toolError(errorMessage)];
 			}
-
+	
 			this.consecutiveMistakeCount = 0;
-			return [false, formatResponse.toolResult(result.result as string)];
+
+			return [false, typeof result.result === 'string' 
+				? formatResponse.toolResult(result.result)
+				: result.result as ToolResponse];
 		} catch (error) {
 			this.consecutiveMistakeCount++;
 			return [false, formatResponse.toolError(error.message)];
 		}
 	}
 
-	// Modify the existing tool execution cases to use the optimization agent
-	case "read_file": {
-		// ... existing parameter validation ...
-		if (!block.partial) {
-			if (!relPath) {
-				this.consecutiveMistakeCount++;
-				pushToolResult(await this.sayAndCreateMissingParamError("read_file", "path"));
-				await this.saveCheckpoint();
-				break;
-			}
-
-			const absolutePath = path.resolve(cwd, relPath);
-			// Use the optimization agent for execution
-			const [userRejected, result] = await this.executeToolWithOptimization(
-				"read_file",
-				{ path: relPath },
-				async (params) => await extractTextFromFile(path.resolve(cwd, params.path))
-			);
-
-			if (userRejected) {
-				this.didRejectTool = true;
-			}
-			pushToolResult(result);
-			await this.saveCheckpoint();
-			break;
-		}
-	}
-
-	case "search_files": {
-		// ... existing parameter validation ...
-		if (!block.partial) {
-			if (!relDirPath || !regex) {
-				// ... existing error handling ...
-				break;
-			}
-
-			const absolutePath = path.resolve(cwd, relDirPath);
-			// Use the optimization agent for execution
-			const [userRejected, result] = await this.executeToolWithOptimization(
-				"search_files",
-				{ path: relDirPath, regex, file_pattern: filePattern },
-				async (params) => await regexSearchFiles(cwd, path.resolve(cwd, params.path), params.regex, params.file_pattern)
-			);
-
-			if (userRejected) {
-				this.didRejectTool = true;
-			}
-			pushToolResult(result);
-			await this.saveCheckpoint();
-			break;
-		}
-	}
-
-	case "list_files": {
-		// ... existing parameter validation ...
-		if (!block.partial) {
-			if (!relDirPath) {
-				// ... existing error handling ...
-				break;
-			}
-
-			const absolutePath = path.resolve(cwd, relDirPath);
-			// Use the optimization agent for execution
-			const [userRejected, result] = await this.executeToolWithOptimization(
-				"list_files",
-				{ path: relDirPath, recursive: recursive ? "true" : "false" },
-				async (params) => {
-					const [files, didHitLimit] = await listFiles(
-						path.resolve(cwd, params.path),
-						params.recursive === "true",
-						200
-					);
-					return formatResponse.formatFilesList(absolutePath, files, didHitLimit);
-				}
-			);
-
-			if (userRejected) {
-				this.didRejectTool = true;
-			}
-			pushToolResult(result);
-			await this.saveCheckpoint();
-			break;
-		}
-	}
-
 	// Add a method to get tool call analytics
-	public getToolCallAnalytics(toolName: ToolUseName) {
+	public getToolCallAnalytics(toolName: ToolUseName): PatternAnalysis {
 		return this.toolCallOptimizationAgent.getPatternAnalysis(toolName);
 	}
 
 	// Add a method to get error history
-	public getToolCallErrorHistory() {
+	public getToolCallErrorHistory(): ErrorReport[] {
 		return this.toolCallOptimizationAgent.getErrorHistory();
 	}
 
 	// Add a method to clear tool call history
-	public clearToolCallHistory() {
+	public clearToolCallHistory(): void {
 		this.toolCallOptimizationAgent.clearHistory();
 	}
 }
