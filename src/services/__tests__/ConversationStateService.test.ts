@@ -1,55 +1,11 @@
 import { ConversationStateService } from '../ConversationStateService';
 import { ClineMessage } from '../../shared/ExtensionMessage';
-import { firstValueFrom } from 'rxjs';
 
 describe('ConversationStateService', () => {
   let service: ConversationStateService;
 
   beforeEach(() => {
     service = new ConversationStateService();
-  });
-
-  afterEach(() => {
-    service.dispose();
-  });
-
-  describe('constructor', () => {
-    it('should initialize with empty state when no history provided', () => {
-      const state = service.getCurrentState();
-      expect(state).toEqual({
-        messages: [],
-        isProcessing: false
-      });
-    });
-
-    it('should initialize with history when provided', () => {
-      const historyMessages: ClineMessage[] = [
-        { type: 'say', text: 'test message', ts: 123 }
-      ];
-      service = new ConversationStateService({ messages: historyMessages });
-      const state = service.getCurrentState();
-      expect(state.messages).toEqual(historyMessages);
-    });
-  });
-
-  describe('setState', () => {
-    it('should update state partially', () => {
-      service.setState({ isProcessing: true });
-      const state = service.getCurrentState();
-      expect(state.isProcessing).toBe(true);
-      expect(state.messages).toEqual([]);
-    });
-
-    it('should merge new state with existing state', () => {
-      const message: ClineMessage = { type: 'say', text: 'test', ts: 123 };
-      service.setState({ messages: [message] });
-      service.setState({ isProcessing: true });
-      const state = service.getCurrentState();
-      expect(state).toEqual({
-        messages: [message],
-        isProcessing: true
-      });
-    });
   });
 
   describe('updateMessage', () => {
@@ -119,32 +75,33 @@ describe('ConversationStateService', () => {
     });
   });
 
-  describe('getState', () => {
-    it('should return observable of state', async () => {
+  describe('clearMessages', () => {
+    it('should clear all messages and lastMessageTs', () => {
       const message: ClineMessage = { type: 'say', text: 'test', ts: 123 };
       service.updateMessage(message);
-      const state = await firstValueFrom(service.getState());
-      expect(state.messages).toEqual([message]);
+      service.clearMessages();
+      const state = service.getCurrentState();
+      expect(state.messages).toEqual([]);
+      expect(state.lastMessageTs).toBeUndefined();
     });
   });
 
-  describe('getMessages', () => {
-    it('should return observable of messages', async () => {
+  describe('subscribe', () => {
+    it('should notify listeners of state changes', () => {
+      const listener = jest.fn();
+      const unsubscribe = service.subscribe(listener);
+      
       const message: ClineMessage = { type: 'say', text: 'test', ts: 123 };
       service.updateMessage(message);
-      const messages = await firstValueFrom(service.getMessages());
-      expect(messages).toEqual([message]);
-    });
-  });
+      
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        messages: [message],
+        lastMessageTs: message.ts
+      }));
 
-  describe('dispose', () => {
-    it('should complete the state subject', async () => {
-      let completed = false;
-      service.getState().subscribe({
-        complete: () => { completed = true; }
-      });
-      service.dispose();
-      expect(completed).toBe(true);
+      unsubscribe();
+      service.updateMessage({ ...message, text: 'updated' });
+      expect(listener).toHaveBeenCalledTimes(1);
     });
   });
 }); 

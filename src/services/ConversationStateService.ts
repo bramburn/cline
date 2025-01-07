@@ -1,107 +1,87 @@
-import { BehaviorSubject, Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { injectable } from 'inversify';
 import { ClineMessage } from '../shared/ExtensionMessage';
-import { HistoryItem } from '../shared/HistoryItem';
+import { ConversationState } from '../types/ConversationState';
 
-export interface ConversationState {
-  messages: ClineMessage[];
-  lastMessageTs?: number;
-  askResponse?: any;
-  askResponseText?: string;
-  askResponseImages?: string[];
-  isProcessing: boolean;
-  error?: string;
-}
-
+@injectable()
 export class ConversationStateService {
-  private stateSubject: BehaviorSubject<ConversationState>;
+  private state: ConversationState = {
+    messages: [],
+    isProcessing: false
+  };
 
-  constructor(historyItem?: HistoryItem) {
-    this.stateSubject = new BehaviorSubject<ConversationState>({
-      messages: historyItem?.messages || [],
-      isProcessing: false
-    });
+  private listeners: ((state: ConversationState) => void)[] = [];
+
+  public getCurrentState(): ConversationState {
+    return { ...this.state };
   }
 
-  setState(state: Partial<ConversationState>) {
-    const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
-      ...state
-    });
+  public subscribe(listener: (state: ConversationState) => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
   }
 
-  updateMessage(message: ClineMessage) {
-    const currentState = this.stateSubject.value;
-    const messages = [...currentState.messages];
-    const existingIndex = messages.findIndex(m => m.ts === message.ts);
+  private notifyListeners() {
+    const currentState = this.getCurrentState();
+    this.listeners.forEach(listener => listener(currentState));
+  }
 
-    if (existingIndex !== -1) {
-      messages[existingIndex] = message;
+  public updateMessage(message: ClineMessage): void {
+    const existingIndex = this.state.messages.findIndex(m => m.ts === message.ts);
+    
+    if (existingIndex === -1) {
+      this.state.messages = [...this.state.messages, message];
     } else {
-      messages.push(message);
+      this.state.messages = [
+        ...this.state.messages.slice(0, existingIndex),
+        message,
+        ...this.state.messages.slice(existingIndex + 1)
+      ];
     }
-
-    this.stateSubject.next({
-      ...currentState,
-      messages,
-      lastMessageTs: message.ts
-    });
+    
+    this.state.lastMessageTs = message.ts;
+    this.notifyListeners();
   }
 
-  setAskResponse(response: any, text?: string, images?: string[]) {
-    const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
+  public setAskResponse(response: any, text?: string, images?: string[]): void {
+    this.state = {
+      ...this.state,
       askResponse: response,
       askResponseText: text,
       askResponseImages: images
-    });
+    };
+    this.notifyListeners();
   }
 
-  clearAskResponse() {
-    const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
-      askResponse: undefined,
-      askResponseText: undefined,
-      askResponseImages: undefined
-    });
+  public clearAskResponse(): void {
+    const { askResponse, askResponseText, askResponseImages, ...rest } = this.state;
+    this.state = rest;
+    this.notifyListeners();
   }
 
-  setProcessing(isProcessing: boolean) {
-    const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
+  public setProcessing(isProcessing: boolean): void {
+    this.state = {
+      ...this.state,
       isProcessing
-    });
+    };
+    this.notifyListeners();
   }
 
-  setError(error: string | undefined) {
-    const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
+  public setError(error?: string): void {
+    this.state = {
+      ...this.state,
       error
-    });
+    };
+    this.notifyListeners();
   }
 
-  getState(): Observable<ConversationState> {
-    return this.stateSubject.asObservable();
-  }
-
-  getMessages(): Observable<ClineMessage[]> {
-    return this.getState().pipe(
-      map(state => state.messages)
-    );
-  }
-
-  getCurrentState(): ConversationState {
-    return this.stateSubject.value;
-  }
-
-  dispose() {
-    if (this.stateSubject) {
-      this.stateSubject.complete();
-    }
+  public clearMessages(): void {
+    this.state = {
+      ...this.state,
+      messages: [],
+      lastMessageTs: undefined
+    };
+    this.notifyListeners();
   }
 } 
