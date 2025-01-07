@@ -60,6 +60,8 @@ import { Observable, from, of, throwError } from 'rxjs';
 import { catchError, tap, map } from 'rxjs/operators';
 import { ConversationHistoryService } from '../services/ConversationHistoryService';
 import { firstValueFrom } from 'rxjs';
+import { MessageService } from '../services/MessageService';
+import { ConversationStateService } from '../services/ConversationStateService';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -107,6 +109,8 @@ export class Cline {
 	private didAlreadyUseTool = false
 	private didCompleteReadingStream = false
 	private conversationHistoryService!: ConversationHistoryService;
+	private messageService: MessageService;
+	private conversationStateService: ConversationStateService;
 
 	constructor(
 		provider: ClineProvider,
@@ -117,6 +121,8 @@ export class Cline {
 		images?: string[],
 		historyItem?: HistoryItem,
 	) {
+		this.messageService = new MessageService();
+		this.conversationStateService = new ConversationStateService();
 		this.providerRef = new WeakRef(provider)
 		this.api = buildApiHandler(apiConfiguration)
 		this.terminalManager = new TerminalManager()
@@ -139,7 +145,7 @@ export class Cline {
 		// Initialize the conversation history service asynchronously
 		this.initializeConversationHistoryService(historyItem);
 	}
-
+	// remove refactor
 	// Add this new private method
 	private async initializeConversationHistoryService(historyItem?: HistoryItem) {
 		const taskDir = await this.ensureTaskDirectoryExists();
@@ -158,7 +164,7 @@ export class Cline {
 		await fs.mkdir(taskDir, { recursive: true })
 		return taskDir
 	}
-
+	// remove refactor
 	private async getSavedApiConversationHistory(): Promise<Anthropic.MessageParam[]> {
 		try {
 			const taskDir = await this.ensureTaskDirectoryExists();
@@ -180,7 +186,7 @@ export class Cline {
 			return [];
 		}
 	}
-
+	// remove refactor
 	private async addToApiConversationHistory(message: Anthropic.MessageParam): Promise<void> {
 		const result = await firstValueFrom(this.conversationHistoryService.addMessage(message));
 		if (!result.success) {
@@ -188,7 +194,7 @@ export class Cline {
 			throw new Error(result.error.message);
 		}
 	}
-
+	// remove refactor
 	private async overwriteApiConversationHistory(newHistory: Anthropic.MessageParam[]): Promise<void> {
 		const taskDir = await this.ensureTaskDirectoryExists();
 		this.conversationHistoryService = new ConversationHistoryService({ 
@@ -541,118 +547,43 @@ export class Cline {
 		if (this.abort) {
 			throw new Error("Cline instance aborted")
 		}
-		let askTs: number
-		if (partial !== undefined) {
-			const lastMessage = this.clineMessages.at(-1)
-			const isUpdatingPreviousPartial =
-				lastMessage && lastMessage.partial && lastMessage.type === "ask" && lastMessage.ask === type
-			if (partial) {
-				if (isUpdatingPreviousPartial) {
-					// existing partial message, so update it
-					lastMessage.text = text
-					lastMessage.partial = partial
-					// todo be more efficient about saving and posting only new data or one whole message at a time so ignore partial for saves, and only post parts of partial message instead of whole array in new listener
-					// await this.saveClineMessages()
-					// await this.providerRef.deref()?.postStateToWebview()
-					await this.providerRef.deref()?.postMessageToWebview({
-						type: "partialMessage",
-						partialMessage: lastMessage,
-					})
-					throw new Error("Current ask promise was ignored 1")
-				} else {
-					// this is a new partial message, so add it with partial state
-					// this.askResponse = undefined
-					// this.askResponseText = undefined
-					// this.askResponseImages = undefined
-					askTs = Date.now()
-					this.lastMessageTs = askTs
-					await this.addToClineMessages({
-						ts: askTs,
-						type: "ask",
-						ask: type,
-						text,
-						partial,
-					})
-					await this.providerRef.deref()?.postStateToWebview()
-					throw new Error("Current ask promise was ignored 2")
-				}
-			} else {
-				// partial=false means its a complete version of a previously partial message
-				if (isUpdatingPreviousPartial) {
-					// this is the complete version of a previously partial message, so replace the partial with the complete version
-					this.askResponse = undefined
-					this.askResponseText = undefined
-					this.askResponseImages = undefined
 
-					/*
-					Bug for the history books:
-					In the webview we use the ts as the chatrow key for the virtuoso list. Since we would update this ts right at the end of streaming, it would cause the view to flicker. The key prop has to be stable otherwise react has trouble reconciling items between renders, causing unmounting and remounting of components (flickering).
-					The lesson here is if you see flickering when rendering lists, it's likely because the key prop is not stable.
-					So in this case we must make sure that the message ts is never altered after first setting it.
-					*/
-					askTs = lastMessage.ts
-					this.lastMessageTs = askTs
-					// lastMessage.ts = askTs
-					lastMessage.text = text
-					lastMessage.partial = false
-					await this.saveClineMessages()
-					// await this.providerRef.deref()?.postStateToWebview()
-					await this.providerRef.deref()?.postMessageToWebview({
-						type: "partialMessage",
-						partialMessage: lastMessage,
-					})
-				} else {
-					// this is a new partial=false message, so add it like normal
-					this.askResponse = undefined
-					this.askResponseText = undefined
-					this.askResponseImages = undefined
-					askTs = Date.now()
-					this.lastMessageTs = askTs
-					await this.addToClineMessages({
-						ts: askTs,
-						type: "ask",
-						ask: type,
-						text,
-					})
-					await this.providerRef.deref()?.postStateToWebview()
-				}
-			}
-		} else {
-			// this is a new non-partial message, so add it like normal
-			// const lastMessage = this.clineMessages.at(-1)
-			this.askResponse = undefined
-			this.askResponseText = undefined
-			this.askResponseImages = undefined
-			askTs = Date.now()
-			this.lastMessageTs = askTs
-			await this.addToClineMessages({
-				ts: askTs,
-				type: "ask",
-				ask: type,
-				text,
-			})
-			await this.providerRef.deref()?.postStateToWebview()
-		}
+		this.conversationStateService.setProcessing(true);
+		
+		try {
+			const result = await firstValueFrom(this.messageService.ask(type, text, partial).pipe(
+				tap(response => {
+					if (response.text) {
+						this.conversationStateService.updateMessage({
+							type: 'ask',
+							text: response.text,
+							ts: Date.now(),
+							partial: partial
+						});
+					}
+				}),
+				catchError(error => {
+					this.conversationStateService.setError(error.message);
+					throw error;
+				})
+			));
 
-		await pWaitFor(() => this.askResponse !== undefined || this.lastMessageTs !== askTs, { interval: 100 })
-		if (this.lastMessageTs !== askTs) {
-			throw new Error("Current ask promise was ignored") // could happen if we send multiple asks in a row i.e. with command_output. It's important that when we know an ask could fail, it is handled gracefully
+			this.conversationStateService.setProcessing(false);
+			return result;
+		} catch (error) {
+			this.conversationStateService.setProcessing(false);
+			throw error;
 		}
-		const result = {
-			response: this.askResponse!,
-			text: this.askResponseText,
-			images: this.askResponseImages,
-		}
-		this.askResponse = undefined
-		this.askResponseText = undefined
-		this.askResponseImages = undefined
-		return result
 	}
 
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[]) {
-		this.askResponse = askResponse
-		this.askResponseText = text
-		this.askResponseImages = images
+		this.askResponse = askResponse;
+		this.askResponseText = text;
+		this.askResponseImages = images;
+		
+		if (text) {
+			this.conversationStateService.setAskResponse(askResponse, text, images);
+		}
 	}
 
 	async say(type: ClineSay, text?: string, images?: string[], partial?: boolean): Promise<undefined> {
@@ -660,77 +591,24 @@ export class Cline {
 			throw new Error("Cline instance aborted")
 		}
 
-		if (partial !== undefined) {
-			const lastMessage = this.clineMessages.at(-1)
-			const isUpdatingPreviousPartial =
-				lastMessage && lastMessage.partial && lastMessage.type === "say" && lastMessage.say === type
-			if (partial) {
-				if (isUpdatingPreviousPartial) {
-					// existing partial message, so update it
-					lastMessage.text = text
-					lastMessage.images = images
-					lastMessage.partial = partial
-					await this.providerRef.deref()?.postMessageToWebview({
-						type: "partialMessage",
-						partialMessage: lastMessage,
-					})
-				} else {
-					// this is a new partial message, so add it with partial state
-					const sayTs = Date.now()
-					this.lastMessageTs = sayTs
-					await this.addToClineMessages({
-						ts: sayTs,
-						type: "say",
-						say: type,
-						text,
-						images,
-						partial,
-					})
-					await this.providerRef.deref()?.postStateToWebview()
-				}
-			} else {
-				// partial=false means its a complete version of a previously partial message
-				if (isUpdatingPreviousPartial) {
-					// this is the complete version of a previously partial message, so replace the partial with the complete version
-					this.lastMessageTs = lastMessage.ts
-					// lastMessage.ts = sayTs
-					lastMessage.text = text
-					lastMessage.images = images
-					lastMessage.partial = false
-
-					// instead of streaming partialMessage events, we do a save and post like normal to persist to disk
-					await this.saveClineMessages()
-					// await this.providerRef.deref()?.postStateToWebview()
-					await this.providerRef.deref()?.postMessageToWebview({
-						type: "partialMessage",
-						partialMessage: lastMessage,
-					}) // more performant than an entire postStateToWebview
-				} else {
-					// this is a new partial=false message, so add it like normal
-					const sayTs = Date.now()
-					this.lastMessageTs = sayTs
-					await this.addToClineMessages({
-						ts: sayTs,
-						type: "say",
-						say: type,
-						text,
-						images,
-					})
-					await this.providerRef.deref()?.postStateToWebview()
-				}
-			}
-		} else {
-			// this is a new non-partial message, so add it like normal
-			const sayTs = Date.now()
-			this.lastMessageTs = sayTs
-			await this.addToClineMessages({
-				ts: sayTs,
-				type: "say",
-				say: type,
-				text,
-				images,
-			})
-			await this.providerRef.deref()?.postStateToWebview()
+		try {
+			await firstValueFrom(this.messageService.say(type, text, images, partial).pipe(
+				tap(response => {
+					this.conversationStateService.updateMessage({
+						type: 'say',
+						text: text || '',
+						ts: Date.now(),
+						partial: partial
+					});
+				}),
+				catchError(error => {
+					this.conversationStateService.setError(error.message);
+					throw error;
+				})
+			));
+			return undefined;
+		} catch (error) {
+			throw error;
 		}
 	}
 
@@ -758,15 +636,22 @@ export class Cline {
 	private async startTask(task?: string, images?: string[]): Promise<void> {
 		// conversationHistory (for API) and clineMessages (for webview) need to be in sync
 		// if the extension process were killed, then on restart the clineMessages might not be empty, so we need to set it to [] when we create a new Cline client (otherwise webview would show stale messages from previous session)
-		this.clineMessages = []
-		this.apiConversationHistory = []
-		await this.providerRef.deref()?.postStateToWebview()
+		this.clineMessages = [];
+		this.apiConversationHistory = [];
+		
+		// Initialize conversation state
+		this.conversationStateService.setState({
+			messages: [],
+			isProcessing: false
+		});
+		
+		await this.providerRef.deref()?.postStateToWebview();
 
-		await this.say("text", task, images)
+		await this.say("text", task, images);
 
-		this.isInitialized = true
+		this.isInitialized = true;
 
-		let imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(images)
+		let imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(images);
 		await this.initiateTaskLoop(
 			[
 				{
@@ -776,7 +661,7 @@ export class Cline {
 				...imageBlocks,
 			],
 			true,
-		)
+		);
 	}
 
 	private async resumeTaskFromHistory() {
@@ -792,65 +677,52 @@ export class Cline {
 		const lastRelevantMessageIndex = findLastIndex(
 			modifiedClineMessages,
 			(m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"),
-		)
+		);
 		if (lastRelevantMessageIndex !== -1) {
-			modifiedClineMessages.splice(lastRelevantMessageIndex + 1)
+			modifiedClineMessages.splice(lastRelevantMessageIndex + 1);
 		}
 
-		// since we don't use api_req_finished anymore, we need to check if the last api_req_started has a cost value, if it doesn't and no cancellation reason to present, then we remove it since it indicates an api request without any partial content streamed
-		const lastApiReqStartedIndex = findLastIndex(
-			modifiedClineMessages,
-			(m) => m.type === "say" && m.say === "api_req_started",
-		)
-		if (lastApiReqStartedIndex !== -1) {
-			const lastApiReqStarted = modifiedClineMessages[lastApiReqStartedIndex]
-			const { cost, cancelReason }: ClineApiReqInfo = JSON.parse(lastApiReqStarted.text || "{}")
-			if (cost === undefined && cancelReason === undefined) {
-				modifiedClineMessages.splice(lastApiReqStartedIndex, 1)
-			}
-		}
+		// Initialize conversation state with history
+		this.conversationStateService.setState({
+			messages: modifiedClineMessages.map(msg => ({
+				type: msg.type,
+				text: msg.text || '',
+				ts: msg.ts,
+				partial: msg.partial
+			})),
+			isProcessing: false
+		});
 
-		await this.overwriteClineMessages(modifiedClineMessages)
-		this.clineMessages = await this.getSavedClineMessages()
+		await this.overwriteClineMessages(modifiedClineMessages);
+		this.clineMessages = await this.getSavedClineMessages();
 
-		// Now present the cline messages to the user and ask if they want to resume (NOTE: we ran into a bug before where the apiconversationhistory wouldnt be initialized when opening a old task, and it was because we were waiting for resume)
-		// This is important in case the user deletes messages without resuming the task first
-		this.apiConversationHistory = await this.getSavedApiConversationHistory()
+		// Initialize API conversation history
+		this.apiConversationHistory = await this.getSavedApiConversationHistory();
 
 		const lastClineMessage = this.clineMessages
 			.slice()
 			.reverse()
-			.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task")) // could be multiple resume tasks
-		// const lastClineMessage = this.clineMessages[lastClineMessageIndex]
-		// could be a completion result with a command
-		// const secondLastClineMessage = this.clineMessages
-		// 	.slice()
-		// 	.reverse()
-		// 	.find(
-		// 		(m, index) =>
-		// 			index !== lastClineMessageIndex && !(m.ask === "resume_task" || m.ask === "resume_completed_task")
-		// 	)
-		// (lastClineMessage?.ask === "command" && secondLastClineMessage?.ask === "completion_result")
+			.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"));
 
-		let askType: ClineAsk
+		let askType: ClineAsk;
 		if (lastClineMessage?.ask === "completion_result") {
-			askType = "resume_completed_task"
+			askType = "resume_completed_task";
 		} else {
-			askType = "resume_task"
+			askType = "resume_task";
 		}
 
-		this.isInitialized = true
+		this.isInitialized = true;
 
-		const { response, text, images } = await this.ask(askType) // calls poststatetowebview
-		let responseText: string | undefined
-		let responseImages: string[] | undefined
+		const { response, text, images } = await this.ask(askType);
+		let responseText: string | undefined;
+		let responseImages: string[] | undefined;
 		if (response === "messageResponse") {
-			await this.say("user_feedback", text, images)
-			responseText = text
-			responseImages = images
+			await this.say("user_feedback", text, images);
+			responseText = text;
+			responseImages = images;
 		}
 
-		// need to make sure that the api conversation history can be resumed by the api, even if it goes out of sync with cline messages
+		// ... rest of the existing code ...
 
 		let existingApiConversationHistory: Anthropic.Messages.MessageParam[] = await this.getSavedApiConversationHistory()
 
@@ -3225,5 +3097,26 @@ export class Cline {
 			return [];
 		}
 		return result.data;
+	}
+
+	async dispose() {
+		this.abort = true;
+		this.conversationStateService.setProcessing(false);
+		this.conversationStateService.clearAskResponse();
+		this.conversationStateService.dispose();
+		
+		// Clean up other resources
+		if (this.browserSession) {
+			await this.browserSession.closeBrowser();
+		}
+		if (this.terminalManager) {
+			this.terminalManager.disposeAll();
+		}
+		if (this.diffViewProvider) {
+			await this.diffViewProvider.revertChanges();
+		}
+		if (this.checkpointTracker) {
+			await this.checkpointTracker.dispose();
+		}
 	}
 }
