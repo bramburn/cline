@@ -121,7 +121,7 @@ export class Cline {
 	private lastMessageTs?: number;
 	private consecutiveAutoApprovedRequestsCount: number = 0;
 	private consecutiveMistakeCount: number = 0;
-	private _abort: boolean = false;
+	
 	private didFinishAbortingStream = false;
 	private abandoned = false;
 	private checkpointTracker?: CheckpointTracker;
@@ -624,21 +624,17 @@ export class Cline {
 		this.conversationStateService.setProcessing(true);
 		
 		try {
-			const result = await firstValueFrom(this.messageService.ask(type, text, partial).pipe(
+			const result = await firstValueFrom(this.messageService.ask(type, text).pipe(
 				tap(response => {
-					if (response.text) {
+					if (response === 'messageResponse') {
 						this.conversationStateService.updateMessage({
 							type: 'ask',
-							text: response.text,
+							text: text || '',
 							ts: Date.now(),
-							partial: partial
+							// You can handle 'partial' logic here if needed
 						});
 					}
 				}),
-				catchError(error => {
-					this.conversationStateService.setError(error.message);
-					throw error;
-				})
 			));
 
 			this.conversationStateService.setProcessing(false);

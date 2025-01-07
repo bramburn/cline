@@ -3,6 +3,7 @@ import { map, catchError, tap, switchMap } from 'rxjs/operators';
 import { ClineMessage, ClineAsk, ClineSay, ClineAskResponse } from '../shared/ExtensionMessage';
 import { ReactiveConversationHistoryService } from './ReactiveConversationHistoryService';
 import { MessageProcessingPipeline } from './MessageProcessingPipeline';
+import { ConversationState } from '../services/ConversationStateService';
 
 export class MessageService {
   private processingPipeline: MessageProcessingPipeline;
@@ -24,7 +25,7 @@ export class MessageService {
     return from(this.processingPipeline.processMessage(message)).pipe(
       switchMap(async (processedMessage) => {
         await this.conversationHistoryService.addMessage(processedMessage);
-        return { response: 'messageResponse', text: '', images: [] }; // Mock response
+        return { response: 'messageResponse', text: '', images: [] } as unknown as ClineAskResponse;
       }),
       catchError(error => {
         console.error('Error processing ask message:', error);
