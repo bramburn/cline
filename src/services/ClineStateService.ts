@@ -30,13 +30,23 @@ export class ClineStateService {
   didRejectTool$: Observable<boolean> = this.didRejectToolSubject.asObservable();
   didAlreadyUseTool$: Observable<boolean> = this.didAlreadyUseToolSubject.asObservable();
 
+  // Enhanced abort management methods
+  setAbort(value: boolean): void {
+    this.abortSubject.next(value);
+  }
+
+  resetAbort(): void {
+    this.abortSubject.next(false);
+  }
+
+  // Getter for current abort state
+  get isAborted(): boolean {
+    return this.abortSubject.value;
+  }
+
   // Setter methods
   setIsStreaming(value: boolean): void {
     this.isStreamingSubject.next(value);
-  }
-
-  setAbort(value: boolean): void {
-    this.abortSubject.next(value);
   }
 
   setDidCompleteReadingStream(value: boolean): void {

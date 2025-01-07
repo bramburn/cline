@@ -75,9 +75,22 @@ import { ClineStateService } from '../services/ClineStateService';
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
 type ToolResponse = string | Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam>
-type UserContent = Array<
-	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam
->
+type UserContentBlock = 
+  | Anthropic.TextBlockParam 
+  | Anthropic.ImageBlockParam 
+  | Anthropic.ToolUseBlockParam 
+  | Anthropic.ToolResultBlockParam;
+
+type UserContent = UserContentBlock[];
+function isValidUserContent(content: any): content is UserContent {
+  return Array.isArray(content) && 
+    content.every(block => 
+      block && (
+        'type' in block && 
+        ['text', 'image', 'tool_use', 'tool_result'].includes(block.type)
+      )
+    );
+}
 
 export class Cline {
 	readonly taskId: string;
@@ -116,7 +129,7 @@ export class Cline {
 	private userMessageContentReady: boolean = false;
 	private didCompleteReadingStream: boolean = false;
 	private assistantMessageContent: AssistantMessageContent[] = [];
-	private userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = [];
+	private userMessageContent: UserContent = [];
 	
 	private readonly task?: string;
 	private readonly images?: string[];
@@ -810,7 +823,7 @@ export class Cline {
 		// if there's no tool use and only a text block, then we can just add a user message
 		// (note this isn't relevant anymore since we use custom tool prompts instead of tool use blocks, but this is here for legacy purposes in case users resume old tasks)
 
-		// if the last message is a user message, we can need to get the assistant message before it to see if it made tool calls, and if so, fill in the remaining tool responses with 'interrupted'
+		// if the last message is a user message, we need to get the assistant message before it to see if it made tool calls, and if so, fill in the remaining tool responses with 'interrupted'
 
 		let modifiedOldUserContent: UserContent // either the last message if its user message, or the user message before the last (assistant) message
 		let modifiedApiConversationHistory: Anthropic.Messages.MessageParam[] // need to remove the last user message to replace with new modified user message
@@ -1852,5 +1865,28 @@ export class Cline {
 	set abort(value: boolean) {
 		this._abort = value;
 		this.clineStateService.setAbort(value);
+	}
+
+	private setUserMessageContent(content: UserContent): void {
+		if (isValidUserContent(content)) {
+			this.userMessageContent = content;
+			this.clineStateService.setCurrentUserMessageContent(
+				content.filter(
+					(block): block is Anthropic.TextBlockParam | Anthropic.ImageBlockParam => 
+						block.type === 'text' || block.type === 'image'
+				)
+			);
+		} else {
+			console.warn('Invalid user content provided', content);
+		}
+	}
+
+	private processUserContent(content: UserContent): void {
+		if (isValidUserContent(content)) {
+			// Process the content
+			this.setUserMessageContent(content);
+		} else {
+			throw new Error('Invalid user content');
+		}
 	}
 }
