@@ -1,162 +1,154 @@
-import { Observable, Subject, from } from 'rxjs';
+import { Observable, BehaviorSubject, from, of } from 'rxjs';
 import { map, catchError, tap, switchMap } from 'rxjs/operators';
-import { ClineMessage, ClineAsk, ClineSay, ClineAskResponse } from '../shared/ExtensionMessage';
-import { ReactiveConversationHistoryService } from './ReactiveConversationHistoryService';
+import { injectable, inject } from 'inversify';
+import {
+  Message,
+  MessageState,
+  MessageServiceConfig,
+  MessageProcessingResult,
+  ProcessingError
+} from '../types/MessageTypes';
+import { MessageValidator } from '../validators/MessageValidator';
 import { MessageProcessingPipeline } from './MessageProcessingPipeline';
-import { ConversationState } from '../services/ConversationStateService';
 import { TaskManagementService } from './TaskManagementService';
 import { TaskMetricsService } from './TaskMetricsService';
 
+@injectable()
 export class MessageService {
-  private processingPipeline: MessageProcessingPipeline;
-  private conversationHistoryService: ReactiveConversationHistoryService;
-  private taskManagementService: TaskManagementService;
-  private taskMetricsService: TaskMetricsService;
+  private state: BehaviorSubject<MessageState>;
+  private validator: MessageValidator;
+  private config: MessageServiceConfig;
 
   constructor(
-    conversationHistoryService: ReactiveConversationHistoryService,
-    taskManagementService?: TaskManagementService,
-    taskMetricsService?: TaskMetricsService
+    @inject(MessageProcessingPipeline) private processingPipeline: MessageProcessingPipeline,
+    @inject(TaskManagementService) private taskManagementService: TaskManagementService,
+    @inject(TaskMetricsService) private taskMetricsService: TaskMetricsService,
+    config?: MessageServiceConfig
   ) {
-    this.processingPipeline = new MessageProcessingPipeline();
-    this.conversationHistoryService = conversationHistoryService;
-    this.taskMetricsService = taskMetricsService || new TaskMetricsService();
-    this.taskManagementService = taskManagementService || new TaskManagementService();
-  }
-
-  ask(type: ClineAsk, text?: string): Observable<ClineAskResponse> {
-    const message: ClineMessage = {
-      ts: Date.now(),
-      type: 'ask',
-      ask: type,
-      text,
+    this.config = {
+      maxContentLength: config?.maxContentLength || 10000,
+      maxHistorySize: config?.maxHistorySize || 100,
+      persistenceEnabled: config?.persistenceEnabled ?? true
     };
 
-    return from(this.startNewTask()).pipe(
-      switchMap(taskId => from(this.processingPipeline.processMessage(message)).pipe(
-        tap(processedMessage => {
-          this.updateTaskMetrics(taskId, processedMessage);
-        }),
-        switchMap(async (processedMessage) => {
-          await this.conversationHistoryService.addMessage(processedMessage);
-          return 'messageResponse' as ClineAskResponse;
-        }),
-        catchError(error => {
-          this.handleError(error, taskId);
-          throw error;
-        })
-      ))
-    );
+    this.validator = new MessageValidator({
+      maxContentLength: this.config.maxContentLength
+    });
+
+    this.state = new BehaviorSubject<MessageState>({
+      messages: [],
+      isProcessing: false
+    });
   }
 
-  say(type: ClineSay, text?: string, images?: string[], partial?: boolean): Observable<void> {
-    const message: ClineMessage = {
-      ts: Date.now(),
-      type: 'say',
-      say: type,
-      text,
-      images,
-      partial
-    };
-
+  public sendMessage(message: Message): Observable<MessageProcessingResult> {
     return from(Promise.resolve()).pipe(
-      tap(() => {
-        this.conversationHistoryService.setProcessing(true);
-        this.conversationHistoryService.addMessage(message);
-      }),
-      tap(() => this.conversationHistoryService.setProcessing(false)),
-      catchError(error => {
-        this.handleError(error);
-        throw error;
-      })
+      tap(() => this.setProcessing(true)),
+      tap(() => this.validator.validate(message)),
+      switchMap(() => this.startNewTask()),
+      switchMap(taskId => this.processMessage(message, taskId)),
+      tap(result => this.handleProcessingResult(result)),
+      catchError(error => this.handleError(error)),
+      tap(() => this.setProcessing(false))
     );
   }
 
   private async startNewTask(): Promise<string> {
     const currentTask = this.taskManagementService.getCurrentTask();
     if (currentTask) {
-      this.taskManagementService.endTask(currentTask.id);
+      await this.taskManagementService.endTask(currentTask.id);
     }
     return this.taskManagementService.startTask();
   }
 
-  private updateTaskMetrics(taskId: string, message: ClineMessage) {
-    // Initialize metrics for new task
+  private processMessage(message: Message, taskId: string): Observable<MessageProcessingResult> {
+    return this.processingPipeline.processMessage(message).pipe(
+      tap(result => {
+        if (result.success) {
+          this.updateState(prevState => ({
+            ...prevState,
+            messages: [...prevState.messages, message],
+            lastMessageId: message.id
+          }));
+          this.updateTaskMetrics(taskId, message);
+        }
+      })
+    );
+  }
+
+  private updateTaskMetrics(taskId: string, message: Message): void {
     this.taskMetricsService.initializeMetrics(taskId);
-
-    // Update token count and cost based on message content
-    if (message.apiReqInfo) {
-      if (message.apiReqInfo.tokensIn) {
-        this.taskMetricsService.trackTokens(taskId, message.apiReqInfo.tokensIn);
-      }
-      if (message.apiReqInfo.tokensOut) {
-        this.taskMetricsService.trackTokens(taskId, message.apiReqInfo.tokensOut);
-      }
-      if (message.apiReqInfo.cacheReads) {
-        this.taskMetricsService.trackCacheOperation(taskId, 'read');
-      }
-      if (message.apiReqInfo.cacheWrites) {
-        this.taskMetricsService.trackCacheOperation(taskId, 'write');
-      }
-      if (message.apiReqInfo.cost) {
-        this.taskMetricsService.trackCost(taskId, message.apiReqInfo.cost);
-      }
-    } else {
-      // Fallback to simple estimation if no API info
-      const estimatedTokens = this.estimateTokenCount(message);
-      this.taskMetricsService.trackTokens(taskId, estimatedTokens);
-    }
-
-    // Update task metrics in management service
-    this.taskManagementService.updateTaskMetrics(taskId, this.taskMetricsService.getMetrics(taskId));
-  }
-
-  private estimateTokenCount(message: ClineMessage): number {
-    // Simple estimation based on text length
-    // In a real implementation, this would use a proper tokenizer
-    return message.text?.length || 0;
-  }
-
-  private handleError(error: any, taskId?: string) {
-    this.conversationHistoryService.setError(error.message || 'An error occurred');
-    this.conversationHistoryService.setProcessing(false);
     
-    if (taskId) {
-      this.taskManagementService.failTask(taskId);
+    // Update basic metrics
+    this.taskMetricsService.trackTokens(taskId, this.estimateTokenCount(message));
+    
+    // Update additional metrics if available
+    if (message.metadata?.apiInfo) {
+      const { tokensIn, tokensOut, cost, cacheReads, cacheWrites } = message.metadata.apiInfo;
+      
+      if (tokensIn) this.taskMetricsService.trackTokens(taskId, tokensIn);
+      if (tokensOut) this.taskMetricsService.trackTokens(taskId, tokensOut);
+      if (cost) this.taskMetricsService.trackCost(taskId, cost);
+      if (cacheReads) this.taskMetricsService.trackCacheOperation(taskId, 'read');
+      if (cacheWrites) this.taskMetricsService.trackCacheOperation(taskId, 'write');
     }
   }
 
-  getState(): Observable<ConversationState> {
-    return this.conversationHistoryService.getState();
+  private estimateTokenCount(message: Message): number {
+    return Math.ceil(message.content.length / 4); // Simple estimation
   }
 
-  getMessages(): Observable<ClineMessage[]> {
-    return this.conversationHistoryService.getMessages();
+  private handleProcessingResult(result: MessageProcessingResult): void {
+    if (!result.success && result.error) {
+      this.setError(result.error.message);
+    }
   }
 
-  getCurrentTask() {
+  private handleError(error: any): Observable<MessageProcessingResult> {
+    const processingError = new ProcessingError(
+      error.message || 'An error occurred during message processing',
+      error
+    );
+    this.setError(processingError.message);
+    return of({ success: false, error: processingError });
+  }
+
+  private setProcessing(isProcessing: boolean): void {
+    this.updateState(prevState => ({ ...prevState, isProcessing }));
+  }
+
+  private setError(error: string): void {
+    this.updateState(prevState => ({ ...prevState, error }));
+  }
+
+  private updateState(updater: (prevState: MessageState) => MessageState): void {
+    const currentState = this.state.value;
+    const newState = updater(currentState);
+    this.state.next(newState);
+  }
+
+  public getState(): Observable<MessageState> {
+    return this.state.asObservable();
+  }
+
+  public getMessages(): Observable<Message[]> {
+    return this.state.pipe(map(state => state.messages));
+  }
+
+  public getCurrentTask() {
     return this.taskManagementService.getCurrentTask();
   }
 
-  updateMessageContent(ts: number, content: string) {
-    const currentState = this.conversationHistoryService.getCurrentState();
-    const message = currentState.messages.find(m => m.ts === ts);
-    if (message) {
-      this.conversationHistoryService.updateMessage({
-        ...message,
-        text: content
-      });
-    }
+  public updateMessageContent(messageId: string, content: string): void {
+    this.updateState(prevState => {
+      const messages = prevState.messages.map(msg =>
+        msg.id === messageId ? { ...msg, content } : msg
+      );
+      return { ...prevState, messages };
+    });
   }
 
-  appendMessageContent(ts: number, content: string) {
-    const currentState = this.conversationHistoryService.getCurrentState();
-    const message = currentState.messages.find(m => m.ts === ts);
-    if (message) {
-      this.conversationHistoryService.updateMessage({
-        ...message,
-        text: (message.text || '') + content
-      });
-    }
+  public dispose(): void {
+    this.state.complete();
   }
 } 

@@ -1,154 +1,166 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { firstValueFrom } from 'rxjs';
 import { MessageService } from '../MessageService';
+import { MessageProcessingPipeline } from '../MessageProcessingPipeline';
 import { TaskManagementService } from '../TaskManagementService';
 import { TaskMetricsService } from '../TaskMetricsService';
-import { ReactiveConversationHistoryService } from '../ReactiveConversationHistoryService';
-import { MessageProcessingPipeline } from '../MessageProcessingPipeline';
-import { firstValueFrom } from 'rxjs';
+import { Message, MessageProcessingResult, ValidationError } from '../../types/MessageTypes';
 
 describe('MessageService', () => {
   let messageService: MessageService;
+  let processingPipeline: MessageProcessingPipeline;
   let taskManagementService: TaskManagementService;
   let taskMetricsService: TaskMetricsService;
-  let conversationHistoryService: ReactiveConversationHistoryService;
-  let messageProcessingPipeline: MessageProcessingPipeline;
 
   beforeEach(() => {
-    taskMetricsService = new TaskMetricsService();
+    processingPipeline = new MessageProcessingPipeline();
     taskManagementService = new TaskManagementService();
-    conversationHistoryService = new ReactiveConversationHistoryService({ taskDir: './test-tasks' });
-    messageProcessingPipeline = new MessageProcessingPipeline();
+    taskMetricsService = new TaskMetricsService();
+
+    vi.spyOn(processingPipeline, 'processMessage');
+    vi.spyOn(taskManagementService, 'startTask');
+    vi.spyOn(taskManagementService, 'endTask');
+    vi.spyOn(taskMetricsService, 'trackTokens');
+    vi.spyOn(taskMetricsService, 'trackCost');
 
     messageService = new MessageService(
-      conversationHistoryService,
+      processingPipeline,
       taskManagementService,
-      taskMetricsService
+      taskMetricsService,
+      { maxContentLength: 100 }
     );
   });
 
-  describe('ask', () => {
-    it('should create new task and track metrics', async () => {
-      const startTaskSpy = vi.spyOn(taskManagementService, 'startTask');
-      const trackTokensSpy = vi.spyOn(taskMetricsService, 'trackTokens');
-      const trackCostSpy = vi.spyOn(taskMetricsService, 'trackCost');
-
-      await firstValueFrom(messageService.ask('command', 'Test message'));
-
-      expect(startTaskSpy).toHaveBeenCalled();
-      expect(trackTokensSpy).toHaveBeenCalled();
-      expect(trackCostSpy).toHaveBeenCalledWith(expect.any(String), 0);
-    });
-
-    it('should handle errors and fail task', async () => {
-      const error = new Error('Test error');
-      vi.spyOn(messageProcessingPipeline, 'processMessage').mockRejectedValue(error);
-      const failTaskSpy = vi.spyOn(taskManagementService, 'failTask');
-
-      try {
-        await firstValueFrom(messageService.ask('command', 'Test message'));
-      } catch (err) {
-        expect(err).toBe(error);
-        expect(failTaskSpy).toHaveBeenCalledWith(expect.any(String));
-      }
-    });
+  const createValidMessage = (): Message => ({
+    id: '123',
+    type: 'user',
+    content: 'Test message',
+    timestamp: Date.now()
   });
 
-  describe('say', () => {
-    it('should update conversation state', async () => {
-      const addMessageSpy = vi.spyOn(conversationHistoryService, 'addMessage');
-      await firstValueFrom(messageService.say('text', 'Test response'));
+  describe('sendMessage', () => {
+    it('should process valid message successfully', async () => {
+      const message = createValidMessage();
+      const processResult: MessageProcessingResult = {
+        success: true,
+        data: message
+      };
 
-      expect(addMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'say',
-        say: 'text',
-        text: 'Test response'
-      }));
-    });
-
-    it('should handle errors', async () => {
-      const error = new Error('Test error');
-      vi.spyOn(conversationHistoryService, 'addMessage').mockRejectedValue(error);
-      const setErrorSpy = vi.spyOn(conversationHistoryService, 'setError');
-
-      try {
-        await firstValueFrom(messageService.say('text', 'Test response'));
-      } catch (err) {
-        expect(err).toBe(error);
-        expect(setErrorSpy).toHaveBeenCalledWith(error.message);
-      }
-    });
-  });
-
-  describe('task management', () => {
-    it('should end current task before starting new one', async () => {
-      const taskId = taskManagementService.startTask();
-      const endTaskSpy = vi.spyOn(taskManagementService, 'endTask');
-
-      await firstValueFrom(messageService.ask('command', 'Test message'));
-
-      expect(endTaskSpy).toHaveBeenCalledWith(taskId);
-    });
-
-    it('should track task metrics', async () => {
-      const trackCacheOpSpy = vi.spyOn(taskMetricsService, 'trackCacheOperation');
-      const trackCostSpy = vi.spyOn(taskMetricsService, 'trackCost');
-
-      vi.spyOn(messageProcessingPipeline, 'processMessage').mockResolvedValue({
-        ts: Date.now(),
-        type: 'ask',
-        ask: 'command',
-        text: 'Test message',
-        apiReqInfo: {
-          cacheReads: 1,
-          cacheWrites: 1,
-          cost: 0.2
-        }
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => resolve(processResult));
       });
 
-      await firstValueFrom(messageService.ask('command', 'Test message'));
+      const result = await firstValueFrom(messageService.sendMessage(message));
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(message);
+      expect(processingPipeline.processMessage).toHaveBeenCalledWith(message);
+    });
 
-      expect(trackCacheOpSpy).toHaveBeenCalledWith(expect.any(String), 'read');
-      expect(trackCacheOpSpy).toHaveBeenCalledWith(expect.any(String), 'write');
-      expect(trackCostSpy).toHaveBeenCalledWith(expect.any(String), 0.2);
+    it('should handle processing errors', async () => {
+      const message = createValidMessage();
+      const error = new Error('Processing failed');
+      
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise((_, reject) => reject(error));
+      });
+
+      const result = await firstValueFrom(messageService.sendMessage(message));
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toContain('Processing failed');
+    });
+
+    it('should update task metrics', async () => {
+      const message = createValidMessage();
+      const taskId = '456';
+      
+      vi.mocked(taskManagementService.startTask).mockReturnValue(taskId);
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => resolve({ success: true, data: message }));
+      });
+
+      await firstValueFrom(messageService.sendMessage(message));
+      
+      expect(taskMetricsService.trackTokens).toHaveBeenCalled();
+      expect(taskManagementService.startTask).toHaveBeenCalled();
     });
   });
 
-  describe('message updates', () => {
-    it('should handle content updates', async () => {
-      const message = {
-        ts: Date.now(),
-        type: 'say' as const,
-        say: 'text' as const,
-        text: 'Initial content'
-      };
+  describe('State Management', () => {
+    it('should update state with new message', async () => {
+      const message = createValidMessage();
+      
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => resolve({ success: true, data: message }));
+      });
 
-      const updateMessageSpy = vi.spyOn(conversationHistoryService, 'updateMessage');
-
-      await firstValueFrom(messageService.say('text', 'Initial content'));
-      messageService.updateMessageContent(message.ts, 'Updated content');
-
-      expect(updateMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
-        text: 'Updated content'
-      }));
+      await firstValueFrom(messageService.sendMessage(message));
+      const state = await firstValueFrom(messageService.getState());
+      
+      expect(state.messages).toContainEqual(message);
+      expect(state.lastMessageId).toBe(message.id);
     });
 
-    it('should handle content appending', async () => {
-      const message = {
-        ts: Date.now(),
-        type: 'say' as const,
-        say: 'text' as const,
-        text: ''
-      };
+    it('should track processing state', async () => {
+      const message = createValidMessage();
+      let isProcessing = false;
+      
+      messageService.getState().subscribe(state => {
+        isProcessing = state.isProcessing;
+      });
 
-      const updateMessageSpy = vi.spyOn(conversationHistoryService, 'updateMessage');
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => {
+          expect(isProcessing).toBe(true);
+          resolve({ success: true, data: message });
+        });
+      });
 
-      await firstValueFrom(messageService.say('text', ''));
-      messageService.appendMessageContent(message.ts, 'Part 1');
-      messageService.appendMessageContent(message.ts, 'Part 2');
+      await firstValueFrom(messageService.sendMessage(message));
+      expect(isProcessing).toBe(false);
+    });
+  });
 
-      expect(updateMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
-        text: 'Part 1Part 2'
-      }));
+  describe('Message Operations', () => {
+    it('should update message content', async () => {
+      const message = createValidMessage();
+      const newContent = 'Updated content';
+      
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => resolve({ success: true, data: message }));
+      });
+
+      await firstValueFrom(messageService.sendMessage(message));
+      messageService.updateMessageContent(message.id, newContent);
+      
+      const messages = await firstValueFrom(messageService.getMessages());
+      const updatedMessage = messages.find(m => m.id === message.id);
+      expect(updatedMessage?.content).toBe(newContent);
+    });
+  });
+
+  describe('Task Management', () => {
+    it('should end current task before starting new one', async () => {
+      const message = createValidMessage();
+      const currentTaskId = '789';
+      const newTaskId = '101112';
+      
+      vi.mocked(taskManagementService.getCurrentTask).mockReturnValue({ id: currentTaskId });
+      vi.mocked(taskManagementService.startTask).mockReturnValue(newTaskId);
+      vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
+        return new Promise(resolve => resolve({ success: true, data: message }));
+      });
+
+      await firstValueFrom(messageService.sendMessage(message));
+      
+      expect(taskManagementService.endTask).toHaveBeenCalledWith(currentTaskId);
+      expect(taskManagementService.startTask).toHaveBeenCalled();
+    });
+  });
+
+  describe('Cleanup', () => {
+    it('should clean up resources on dispose', () => {
+      messageService.dispose();
+      expect(() => firstValueFrom(messageService.getState())).rejects.toThrow();
     });
   });
 }); 
