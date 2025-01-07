@@ -1,5 +1,6 @@
 import { Observable, Subject } from 'rxjs';
 import { TaskMetricsService } from './TaskMetricsService';
+import { v4 as uuidv4 } from 'uuid';
 
 export interface TaskState {
   id: string;
@@ -34,7 +35,7 @@ export class TaskManagementService {
     }
 
     const newTask: TaskState = {
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       status: 'active',
       startTime: Date.now(),
       metrics: {

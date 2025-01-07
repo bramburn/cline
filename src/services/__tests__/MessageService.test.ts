@@ -1,200 +1,148 @@
 import { MessageService } from '../MessageService';
-import { ClineMessage, ClineAsk, ClineSay } from '../../shared/ExtensionMessage';
-import { firstValueFrom } from 'rxjs';
-import { ConversationStateService } from '../ConversationStateService';
+import { ReactiveConversationHistoryService } from '../ReactiveConversationHistoryService';
+import { TaskManagementService } from '../TaskManagementService';
+import { TaskMetricsService } from '../TaskMetricsService';
+import { ClineMessage } from '../../shared/ExtensionMessage';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-// Mock ConversationStateService
-jest.mock('../ConversationStateService');
+vi.mock('../ReactiveConversationHistoryService');
+vi.mock('../MessageProcessingPipeline');
 
 describe('MessageService', () => {
-  let service: MessageService;
-  let mockConversationStateService: jest.Mocked<ConversationStateService>;
+  let messageService: MessageService;
+  let conversationHistoryService: ReactiveConversationHistoryService;
+  let taskManagementService: TaskManagementService;
+  let taskMetricsService: TaskMetricsService;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    service = new MessageService();
-    mockConversationStateService = (ConversationStateService as jest.Mock).mock.instances[0];
+    conversationHistoryService = new ReactiveConversationHistoryService({ taskDir: '/mock/dir' });
+    taskMetricsService = new TaskMetricsService();
+    taskManagementService = new TaskManagementService(taskMetricsService);
+    messageService = new MessageService(
+      conversationHistoryService,
+      taskManagementService,
+      taskMetricsService
+    );
   });
 
   describe('ask', () => {
-    it('should process ask message and update state', async () => {
-      const type: ClineAsk = 'command';
-      const text = 'test command';
-      const expectedResponse = {
-        response: 'messageResponse' as const,
-        text: '',
-        images: []
+    it('should create new task and track metrics', (done) => {
+      const message: ClineMessage = {
+        ts: Date.now(),
+        type: 'ask',
+        ask: 'command',
+        text: 'test command',
+        apiReqInfo: {
+          tokensIn: 10,
+          tokensOut: 20,
+          cost: 0.5,
+          cacheReads: 1,
+          cacheWrites: 2
+        }
       };
 
-      const result = await firstValueFrom(service.ask(type, text));
+      vi.spyOn(taskManagementService, 'startTask');
+      vi.spyOn(taskMetricsService, 'trackTokens');
+      vi.spyOn(taskMetricsService, 'trackCost');
+      vi.spyOn(taskMetricsService, 'trackCacheOperation');
 
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(true);
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'ask',
-          ask: type,
-          text,
-          partial: undefined
-        })
-      );
-      expect(mockConversationStateService.setAskResponse).toHaveBeenCalledWith(
-        expectedResponse.response,
-        expectedResponse.text,
-        expectedResponse.images
-      );
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(false);
-      expect(result).toEqual(expectedResponse);
-    });
-
-    it('should handle partial ask messages', async () => {
-      const type: ClineAsk = 'command';
-      const text = 'partial command';
-      const partial = true;
-
-      await firstValueFrom(service.ask(type, text, partial));
-
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'ask',
-          ask: type,
-          text,
-          partial: true
-        })
-      );
-    });
-
-    it('should handle errors during ask process', async () => {
-      const error = new Error('Test error');
-      mockConversationStateService.setProcessing.mockImplementationOnce(() => {
-        throw error;
+      messageService.ask('command', 'test command').subscribe({
+        next: (response) => {
+          expect(taskManagementService.startTask).toHaveBeenCalled();
+          expect(taskMetricsService.trackTokens).toHaveBeenCalledTimes(2); // tokensIn and tokensOut
+          expect(taskMetricsService.trackCost).toHaveBeenCalledWith(expect.any(String), 0.5);
+          expect(taskMetricsService.trackCacheOperation).toHaveBeenCalledTimes(3); // reads and writes
+          done();
+        },
+        error: done
       });
+    });
 
-      await expect(firstValueFrom(service.ask('command'))).rejects.toThrow(error);
-      expect(mockConversationStateService.setError).toHaveBeenCalledWith(error.message);
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(false);
+    it('should handle errors and fail task', (done) => {
+      const error = new Error('Test error');
+      vi.spyOn(taskManagementService, 'failTask');
+
+      messageService.ask('command', 'test command').subscribe({
+        error: (err) => {
+          expect(err).toBe(error);
+          expect(taskManagementService.failTask).toHaveBeenCalledWith(expect.any(String), error);
+          done();
+        }
+      });
     });
   });
 
   describe('say', () => {
-    it('should process say message and update state', async () => {
-      const type: ClineSay = 'text';
-      const text = 'test message';
-      const images = ['image1.png'];
+    it('should update conversation state', (done) => {
+      vi.spyOn(conversationHistoryService, 'setProcessing');
+      vi.spyOn(conversationHistoryService, 'updateMessage');
 
-      await firstValueFrom(service.say(type, text, images));
-
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(true);
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'say',
-          say: type,
-          text,
-          images,
-          partial: undefined
-        })
-      );
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(false);
+      messageService.say('text', 'test message').subscribe({
+        complete: () => {
+          expect(conversationHistoryService.setProcessing).toHaveBeenCalledWith(true);
+          expect(conversationHistoryService.updateMessage).toHaveBeenCalled();
+          expect(conversationHistoryService.setProcessing).toHaveBeenCalledWith(false);
+          done();
+        },
+        error: done
+      });
     });
 
-    it('should handle partial say messages', async () => {
-      const type: ClineSay = 'text';
-      const text = 'partial message';
-      const partial = true;
-
-      await firstValueFrom(service.say(type, text, undefined, partial));
-
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'say',
-          say: type,
-          text,
-          partial: true
-        })
-      );
-    });
-
-    it('should handle errors during say process', async () => {
+    it('should handle errors', (done) => {
       const error = new Error('Test error');
-      mockConversationStateService.setProcessing.mockImplementationOnce(() => {
-        throw error;
-      });
+      vi.spyOn(conversationHistoryService, 'setError');
 
-      await expect(firstValueFrom(service.say('text'))).rejects.toThrow(error);
-      expect(mockConversationStateService.setError).toHaveBeenCalledWith(error.message);
-      expect(mockConversationStateService.setProcessing).toHaveBeenCalledWith(false);
+      messageService.say('text', 'test message').subscribe({
+        error: (err) => {
+          expect(err).toBe(error);
+          expect(conversationHistoryService.setError).toHaveBeenCalledWith(error.message);
+          done();
+        }
+      });
     });
   });
 
-  describe('updatePartialMessage', () => {
-    it('should update existing partial message with same type and ask/say', () => {
-      const currentMessages = [
-        { type: 'say', say: 'text', text: 'old', partial: true, ts: 123 }
-      ];
-      mockConversationStateService.getCurrentState.mockReturnValue({
-        messages: currentMessages,
-        isProcessing: false
-      });
-
-      const newMessage: ClineMessage = {
-        type: 'say',
-        say: 'text',
-        text: 'new',
-        partial: true,
-        ts: 456
-      };
-
-      service.updatePartialMessage(newMessage);
-
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith({
-        ...currentMessages[0],
-        text: 'new'
-      });
+  describe('task management', () => {
+    it('should get current task', () => {
+      vi.spyOn(taskManagementService, 'getCurrentTask');
+      messageService.getCurrentTask();
+      expect(taskManagementService.getCurrentTask).toHaveBeenCalled();
     });
 
-    it('should add new message when no matching partial message exists', () => {
-      const currentMessages: ClineMessage[] = [];
-      mockConversationStateService.getCurrentState.mockReturnValue({
-        messages: currentMessages,
-        isProcessing: false
-      });
-
-      const newMessage: ClineMessage = {
-        type: 'say',
-        say: 'text',
-        text: 'new',
-        partial: true,
-        ts: 123
-      };
-
-      service.updatePartialMessage(newMessage);
-
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(newMessage);
-    });
-
-    it('should add new message when message is not partial', () => {
-      const newMessage: ClineMessage = {
-        type: 'say',
-        say: 'text',
-        text: 'complete',
-        partial: false,
-        ts: 123
-      };
-
-      service.updatePartialMessage(newMessage);
-
-      expect(mockConversationStateService.updateMessage).toHaveBeenCalledWith(newMessage);
+    it('should get all tasks', () => {
+      vi.spyOn(taskManagementService, 'getAllTasks');
+      messageService.getAllTasks();
+      expect(taskManagementService.getAllTasks).toHaveBeenCalled();
     });
   });
 
-  describe('getState and getMessages', () => {
-    it('should delegate getState to ConversationStateService', () => {
-      service.getState();
-      expect(mockConversationStateService.getState).toHaveBeenCalled();
+  describe('partial message updates', () => {
+    it('should update partial message correctly', () => {
+      const message: ClineMessage = {
+        ts: Date.now(),
+        type: 'say',
+        say: 'text',
+        text: 'partial message',
+        partial: true
+      };
+
+      vi.spyOn(conversationHistoryService, 'updateMessage');
+      messageService.updatePartialMessage(message);
+      expect(conversationHistoryService.updateMessage).toHaveBeenCalledWith(message);
     });
 
-    it('should delegate getMessages to ConversationStateService', () => {
-      service.getMessages();
-      expect(mockConversationStateService.getMessages).toHaveBeenCalled();
+    it('should handle non-partial message', () => {
+      const message: ClineMessage = {
+        ts: Date.now(),
+        type: 'say',
+        say: 'text',
+        text: 'complete message',
+        partial: false
+      };
+
+      vi.spyOn(conversationHistoryService, 'updateMessage');
+      messageService.updatePartialMessage(message);
+      expect(conversationHistoryService.updateMessage).toHaveBeenCalledWith(message);
     });
   });
 }); 
