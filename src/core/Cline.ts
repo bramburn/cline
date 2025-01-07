@@ -62,6 +62,7 @@ import { ConversationHistoryService } from '../services/ConversationHistoryServi
 import { firstValueFrom } from 'rxjs';
 import { MessageService } from '../services/MessageService';
 import { ConversationStateService } from '../services/ConversationStateService';
+import { ToolCallOptimizationAgent } from './agents/ToolCallOptimizationAgent';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -96,6 +97,7 @@ export class Cline {
 	checkpointTrackerErrorMessage?: string
 	conversationHistoryDeletedRange?: [number, number]
 	isInitialized = false
+	private toolCallOptimizationAgent: ToolCallOptimizationAgent;
 
 	// streaming
 	isStreaming = false
@@ -131,6 +133,7 @@ export class Cline {
 		this.diffViewProvider = new DiffViewProvider(cwd)
 		this.customInstructions = customInstructions
 		this.autoApprovalSettings = autoApprovalSettings
+		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
 		if (historyItem) {
 			this.taskId = historyItem.id
 			this.conversationHistoryDeletedRange = historyItem.conversationHistoryDeletedRange
@@ -3128,5 +3131,134 @@ export class Cline {
 
 	getConversationMessages() {
 		return this.conversationStateService.getMessages();
+	}
+
+	private async executeToolWithOptimization<T>(
+		toolName: ToolUseName,
+		parameters: Record<string, string>,
+		execute: (params: Record<string, string>) => Promise<T>
+	): Promise<[boolean, string]> {
+		try {
+			const result = await this.toolCallOptimizationAgent.executeToolCall(
+				toolName,
+				parameters,
+				execute
+			);
+
+			if (result.error) {
+				this.consecutiveMistakeCount++;
+				const errorMessage = `Error executing ${toolName}: ${result.error.message}\n\n` +
+					`Suggestions:\n${result.error.suggestions.map(s => 
+						`- Try with parameters: ${JSON.stringify(s.suggestedParameters)}\n  Reason: ${s.reasoning}`
+					).join('\n')}`;
+				return [false, formatResponse.toolError(errorMessage)];
+			}
+
+			this.consecutiveMistakeCount = 0;
+			return [false, formatResponse.toolResult(result.result as string)];
+		} catch (error) {
+			this.consecutiveMistakeCount++;
+			return [false, formatResponse.toolError(error.message)];
+		}
+	}
+
+	// Modify the existing tool execution cases to use the optimization agent
+	case "read_file": {
+		// ... existing parameter validation ...
+		if (!block.partial) {
+			if (!relPath) {
+				this.consecutiveMistakeCount++;
+				pushToolResult(await this.sayAndCreateMissingParamError("read_file", "path"));
+				await this.saveCheckpoint();
+				break;
+			}
+
+			const absolutePath = path.resolve(cwd, relPath);
+			// Use the optimization agent for execution
+			const [userRejected, result] = await this.executeToolWithOptimization(
+				"read_file",
+				{ path: relPath },
+				async (params) => await extractTextFromFile(path.resolve(cwd, params.path))
+			);
+
+			if (userRejected) {
+				this.didRejectTool = true;
+			}
+			pushToolResult(result);
+			await this.saveCheckpoint();
+			break;
+		}
+	}
+
+	case "search_files": {
+		// ... existing parameter validation ...
+		if (!block.partial) {
+			if (!relDirPath || !regex) {
+				// ... existing error handling ...
+				break;
+			}
+
+			const absolutePath = path.resolve(cwd, relDirPath);
+			// Use the optimization agent for execution
+			const [userRejected, result] = await this.executeToolWithOptimization(
+				"search_files",
+				{ path: relDirPath, regex, file_pattern: filePattern },
+				async (params) => await regexSearchFiles(cwd, path.resolve(cwd, params.path), params.regex, params.file_pattern)
+			);
+
+			if (userRejected) {
+				this.didRejectTool = true;
+			}
+			pushToolResult(result);
+			await this.saveCheckpoint();
+			break;
+		}
+	}
+
+	case "list_files": {
+		// ... existing parameter validation ...
+		if (!block.partial) {
+			if (!relDirPath) {
+				// ... existing error handling ...
+				break;
+			}
+
+			const absolutePath = path.resolve(cwd, relDirPath);
+			// Use the optimization agent for execution
+			const [userRejected, result] = await this.executeToolWithOptimization(
+				"list_files",
+				{ path: relDirPath, recursive: recursive ? "true" : "false" },
+				async (params) => {
+					const [files, didHitLimit] = await listFiles(
+						path.resolve(cwd, params.path),
+						params.recursive === "true",
+						200
+					);
+					return formatResponse.formatFilesList(absolutePath, files, didHitLimit);
+				}
+			);
+
+			if (userRejected) {
+				this.didRejectTool = true;
+			}
+			pushToolResult(result);
+			await this.saveCheckpoint();
+			break;
+		}
+	}
+
+	// Add a method to get tool call analytics
+	public getToolCallAnalytics(toolName: ToolUseName) {
+		return this.toolCallOptimizationAgent.getPatternAnalysis(toolName);
+	}
+
+	// Add a method to get error history
+	public getToolCallErrorHistory() {
+		return this.toolCallOptimizationAgent.getErrorHistory();
+	}
+
+	// Add a method to clear tool call history
+	public clearToolCallHistory() {
+		this.toolCallOptimizationAgent.clearHistory();
 	}
 }
