@@ -32,6 +32,7 @@ describe('ToolCallOptimizationAgent', () => {
     });
 
     it('should retry on failure and succeed', async () => {
+      console.log("Test: should retry on failure and succeed - Start");
       const operation = vi.fn()
         .mockRejectedValueOnce(new Error('fail1'))
         .mockRejectedValueOnce(new Error('fail2'))
@@ -49,9 +50,11 @@ describe('ToolCallOptimizationAgent', () => {
       expect(patterns[0].outcome.success).toBe(false);
       expect(patterns[1].outcome.success).toBe(false);
       expect(patterns[2].outcome.success).toBe(true);
+      console.log("Test: should retry on failure and succeed - End");
     });
 
     it('should fail after max retries', async () => {
+      console.log("Test: should fail after max retries - Start");
       const error = new Error('test error');
       const operation = vi.fn().mockRejectedValue(error);
       const parameters = { param1: 'value1' };
@@ -64,9 +67,11 @@ describe('ToolCallOptimizationAgent', () => {
       const patterns = agent.getPatterns();
       expect(patterns).toHaveLength(3);
       expect(patterns.every(p => !p.outcome.success)).toBe(true);
+      console.log("Test: should fail after max retries - End");
     });
 
     it('should respect custom tool configuration', async () => {
+      console.log("Test: should respect custom tool configuration - Start");
       const operation = vi.fn().mockRejectedValue(new Error('test error'));
       const parameters = { param1: 'value1' };
 
@@ -80,6 +85,7 @@ describe('ToolCallOptimizationAgent', () => {
         .rejects.toThrow();
 
       expect(operation).toHaveBeenCalledTimes(1);
+      console.log("Test: should respect custom tool configuration - End");
     });
 
     it('should modify parameters between retries', async () => {
@@ -146,8 +152,10 @@ describe('ToolCallOptimizationAgent', () => {
       await agent.executeToolCall('tool1', parameters, operation);
       expect(agent.getPatterns()).toHaveLength(1);
 
+      console.log("Calling clearPatterns");
       agent.clearPatterns();
       expect(agent.getPatterns()).toHaveLength(0);
+      console.log("clearPatterns called");
     });
   });
 
@@ -175,4 +183,4 @@ describe('ToolCallOptimizationAgent', () => {
       expect(config.modifyParameters).toBeDefined();
     });
   });
-}); 
+});

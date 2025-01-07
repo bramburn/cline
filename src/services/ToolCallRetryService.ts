@@ -57,6 +57,10 @@ export class ToolCallRetryService {
     this.retryHistory.delete(toolId);
   }
 
+  public clearHistory(): void {
+    this.retryHistory.clear();
+  }
+
   private updateRetryHistory(toolId: string, attempts: number, lastError?: Error): void {
     this.retryHistory.set(toolId, {
       attempts,
@@ -64,4 +68,4 @@ export class ToolCallRetryService {
       lastAttemptTime: Date.now()
     });
   }
-} 
+}

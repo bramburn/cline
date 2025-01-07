@@ -2,9 +2,21 @@ import { ToolUseName } from '../core/assistant-message';
 import { 
   ErrorCategory, 
   PatternAnalysis, 
-  ToolCallPattern, 
   ToolCallSuggestion 
 } from '../types/ToolCallOptimization';
+
+export interface ToolCallPattern {
+  toolId: string;
+  toolName: 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion';
+  parameters: Record<string, any>;
+  outcome: {
+    success: boolean;
+    error?: Error;
+    duration: number;
+  };
+  timestamp: number;
+  errorType?: ErrorCategory;
+}
 
 export class ToolCallPatternAnalyzer {
   private patterns: ToolCallPattern[] = [];
@@ -182,7 +194,7 @@ export class ToolCallPatternAnalyzer {
     };
   }
 
-  public clearPatterns(): void {
+  public clearAnalysis(): void {
     this.patterns = [];
   }
-} 
+}

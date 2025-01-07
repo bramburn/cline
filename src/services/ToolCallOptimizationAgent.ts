@@ -1,13 +1,4 @@
-export interface ToolCallPattern {
-  toolId: string;
-  parameters: Record<string, any>;
-  outcome: {
-    success: boolean;
-    error?: Error;
-    duration: number;
-  };
-  timestamp: number;
-}
+// Removed conflicting ToolCallPattern interface
 
 export interface OptimizationConfig {
   maxRetries: number;
@@ -16,11 +7,31 @@ export interface OptimizationConfig {
   modifyParameters?: (parameters: Record<string, any>, error: Error) => Record<string, any>;
 }
 
+export interface ErrorReport {
+  error: Error;
+  timestamp: number;
+}
+
+import { ToolCallPattern } from './ToolCallPatternAnalyzer';
+import { ToolCallRetryService } from './ToolCallRetryService';
+import { ToolCallPatternAnalyzer } from './ToolCallPatternAnalyzer';
+import { ToolCallErrorReporter } from './ToolCallErrorReporter';
+import { ToolCallSuggestionGenerator } from './ToolCallSuggestionGenerator';
+import { ErrorCategory } from '../types/ToolCallOptimization';
+
 export class ToolCallOptimizationAgent {
   private patterns: ToolCallPattern[] = [];
   private toolConfigs = new Map<string, OptimizationConfig>();
+  private retryService: ToolCallRetryService;
+  private patternAnalyzer: ToolCallPatternAnalyzer;
+  private errorReporter: ToolCallErrorReporter;
+  private suggestionGenerator: ToolCallSuggestionGenerator;
 
   constructor() {
+    this.retryService = new ToolCallRetryService();
+    this.patternAnalyzer = new ToolCallPatternAnalyzer();
+    this.errorReporter = new ToolCallErrorReporter();
+    this.suggestionGenerator = new ToolCallSuggestionGenerator();
     this.initializeDefaultConfigs();
   }
 
@@ -29,7 +40,7 @@ export class ToolCallOptimizationAgent {
       maxRetries: 3,
       retryDelay: 1000,
       shouldRetry: (error: Error) => true,
-      modifyParameters: (parameters: Record<string, any>) => ({ ...parameters })
+      modifyParameters: (parameters: Record<string, any>, error: Error) => ({ ...parameters })
     };
 
     this.toolConfigs.set('default', defaultConfig);
@@ -48,8 +59,10 @@ export class ToolCallOptimizationAgent {
     while (attempts < config.maxRetries) {
       try {
         const result = await operation(parameters);
+        console.log(`Tool call ${toolId} executed successfully with result:`, result);
         this.recordPattern({
           toolId,
+          toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
           parameters,
           outcome: {
             success: true,
@@ -62,15 +75,18 @@ export class ToolCallOptimizationAgent {
         attempts++;
         lastError = error instanceof Error ? error : new Error(String(error));
 
+        console.log(`Tool call ${toolId} failed with error:`, lastError);
         this.recordPattern({
           toolId,
+          toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
           parameters,
           outcome: {
             success: false,
             error: lastError,
             duration: Date.now() - startTime
           },
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          errorType: lastError.message.includes('regex') ? 'regex' as ErrorCategory : lastError.message.includes('timeout') ? 'timeout' as ErrorCategory : undefined
         });
 
         if (config.shouldRetry && !config.shouldRetry(lastError)) {
@@ -104,14 +120,56 @@ export class ToolCallOptimizationAgent {
   }
 
   public getPatterns(): ToolCallPattern[] {
+    console.log('Current patterns:', this.patterns);
     return [...this.patterns];
   }
 
-  public clearPatterns(): void {
+  public getRetryHistory(): ToolCallPattern[] {
+    return this.patterns.filter(p => !p.outcome.success);
+  }
+
+  public clearHistory(): void {
     this.patterns = [];
+    this.retryService.clearHistory();
+    this.patternAnalyzer.clearAnalysis();
+    this.errorReporter.clearHistory();
+  }
+
+  public getPatternAnalysis(): Record<string, { successRate: number; successfulPatterns: string[] }> {
+    const analysis: Record<string, { successRate: number; successfulPatterns: string[] }> = {};
+    
+    this.patterns.forEach(pattern => {
+      if (!analysis[pattern.toolId]) {
+        analysis[pattern.toolId] = {
+          successRate: 0,
+          successfulPatterns: []
+        };
+      }
+      
+      if (pattern.outcome.success) {
+        analysis[pattern.toolId].successfulPatterns.push(JSON.stringify(pattern.parameters));
+      }
+    });
+
+    // Calculate success rates
+    for (const toolId in analysis) {
+      const totalAttempts = this.patterns.filter(p => p.toolId === toolId).length;
+      const successfulAttempts = analysis[toolId].successfulPatterns.length;
+      analysis[toolId].successRate = totalAttempts > 0 ? successfulAttempts / totalAttempts : 0;
+    }
+
+    return analysis;
+  }
+
+  public getErrorHistory(): Array<{ error: { message: string }; timestamp: number }> {
+    return this.errorReporter.getHistory();
+  }
+
+  public getSuggestions(): string[] {
+    return this.suggestionGenerator.getSuggestions();
   }
 
   private recordPattern(pattern: ToolCallPattern): void {
     this.patterns.push(pattern);
   }
-} 
+}
