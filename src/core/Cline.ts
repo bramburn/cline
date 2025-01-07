@@ -59,6 +59,7 @@ import getFolderSize from "get-folder-size"
 import { Observable, from, of, throwError } from 'rxjs';
 import { catchError, tap, map } from 'rxjs/operators';
 import { ConversationHistoryService } from '../services/ConversationHistoryService';
+import { firstValueFrom } from 'rxjs';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -105,7 +106,7 @@ export class Cline {
 	private didRejectTool = false
 	private didAlreadyUseTool = false
 	private didCompleteReadingStream = false
-	private conversationHistoryService: ConversationHistoryService = new ConversationHistoryService(this.ensureTaskDirectoryExists(), []);
+	private conversationHistoryService!: ConversationHistoryService;
 
 	constructor(
 		provider: ClineProvider,
@@ -143,7 +144,7 @@ export class Cline {
 	private async initializeConversationHistoryService(historyItem?: HistoryItem) {
 		const taskDir = await this.ensureTaskDirectoryExists();
 		const initialHistory = historyItem ? await this.getSavedApiConversationHistory() : [];
-		this.conversationHistoryService = new ConversationHistoryService(taskDir, initialHistory);
+		this.conversationHistoryService = new ConversationHistoryService({ taskDir, initialHistory });
 	}
 
 	// Storing task to disk for history
@@ -161,32 +162,39 @@ export class Cline {
 	private async getSavedApiConversationHistory(): Promise<Anthropic.MessageParam[]> {
 		try {
 			const taskDir = await this.ensureTaskDirectoryExists();
-			const filePath = path.join(taskDir, GlobalFileNames.apiConversationHistory);
-			const fileExists = await fileExistsAtPath(filePath);
-			if (fileExists) {
-				return JSON.parse(await fs.readFile(filePath, 'utf8'));
+			const service = new ConversationHistoryService({ taskDir });
+			const loadResult = await firstValueFrom(service.loadFromFile());
+			if (!loadResult.success) {
+				console.error('Failed to load history from file:', loadResult.error);
+				return [];
 			}
+			const historyResult = service.getCurrentHistory();
+			if (!historyResult.success) {
+				console.error('Failed to get current history:', historyResult.error);
+				return [];
+			}
+			service.dispose();
+			return historyResult.data;
 		} catch (error) {
 			console.error('Failed to read conversation history:', error);
+			return [];
 		}
-		return [];
 	}
 
 	private async addToApiConversationHistory(message: Anthropic.MessageParam): Promise<void> {
-		return new Promise((resolve, reject) => {
-			this.conversationHistoryService.addMessage(message).subscribe({
-				next: () => resolve(),
-				error: (error) => {
-					console.error('Failed to add message to history:', error);
-					reject(error);
-				}
-			});
-		});
+		const result = await firstValueFrom(this.conversationHistoryService.addMessage(message));
+		if (!result.success) {
+			console.error('Failed to add message to history:', result.error);
+			throw new Error(result.error.message);
+		}
 	}
 
 	private async overwriteApiConversationHistory(newHistory: Anthropic.MessageParam[]): Promise<void> {
 		const taskDir = await this.ensureTaskDirectoryExists();
-		this.conversationHistoryService = new ConversationHistoryService(taskDir, newHistory);
+		this.conversationHistoryService = new ConversationHistoryService({ 
+			taskDir, 
+			initialHistory: newHistory 
+		});
 	}
 
 	private async saveApiConversationHistory() {
@@ -1049,7 +1057,7 @@ export class Cline {
 		this.urlContentFetcher.closeBrowser()
 		this.browserSession.closeBrowser()
 		await this.diffViewProvider.revertChanges() // need to await for when we want to make sure directories/files are reverted before re-starting the task from a checkpoint
-		this.conversationHistoryService.dispose(); // Add this line
+		this.conversationHistoryService.dispose()
 	}
 
 	// Checkpoints
@@ -3211,6 +3219,11 @@ export class Cline {
 	}
 
 	private getCurrentHistory(): Anthropic.MessageParam[] {
-		return this.conversationHistoryService.getCurrentHistory();
+		const result = this.conversationHistoryService.getCurrentHistory();
+		if (!result.success) {
+			console.error('Failed to get current history:', result.error);
+			return [];
+		}
+		return result.data;
 	}
 }
