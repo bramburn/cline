@@ -65,6 +65,8 @@ import { MessageService } from '../services/MessageService';
 import { ConversationStateService } from '../services/ConversationStateService';
 import { ToolCallOptimizationAgent } from './agents/ToolCallOptimizationAgent';
 import { PatternAnalysis, ErrorReport } from '../types/ToolCallOptimization';
+import { ApiRequestService } from '../services/ApiRequestService';
+import { Subject } from 'rxjs';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -100,6 +102,8 @@ export class Cline {
 	conversationHistoryDeletedRange?: [number, number]
 	isInitialized = false
 	private toolCallOptimizationAgent: ToolCallOptimizationAgent;
+	private apiRequestService: ApiRequestService;
+	private abortSubject = new Subject<boolean>();
 
 	// streaming
 	isStreaming = false
@@ -136,6 +140,7 @@ export class Cline {
 		this.customInstructions = customInstructions
 		this.autoApprovalSettings = autoApprovalSettings
 		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
+		this.apiRequestService = new ApiRequestService();
 		if (historyItem) {
 			this.taskId = historyItem.id
 			this.conversationHistoryDeletedRange = historyItem.conversationHistoryDeletedRange
@@ -1155,30 +1160,32 @@ export class Cline {
 			this.conversationHistoryDeletedRange,
 		)
 
-		const stream = this.api.createMessage(systemPrompt, truncatedConversationHistory)
-		const iterator = stream[Symbol.asyncIterator]()
+		// Prepare API request options
+		const apiRequestOptions = {
+			systemPrompt,
+			conversationHistory: this.apiConversationHistory,
+			previousApiReqIndex,
+			mcpHub,
+			abort$: this.abortSubject.asObservable()
+		};
 
+		// Use ApiRequestService to perform the request
+		const apiStream$ = this.apiRequestService.performApiRequest(this.api, apiRequestOptions);
+
+		// Convert Observable to AsyncGenerator
 		try {
-			// awaiting first chunk to see if it will throw an error
-			const firstChunk = await iterator.next()
-			yield firstChunk.value
+		for await (const chunk of apiStream$) {
+			yield chunk;
+			}
 		} catch (error) {
-			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
+			// Handle first chunk error
 			const { response } = await this.ask("api_req_failed", error.message ?? JSON.stringify(serializeError(error), null, 2))
 			if (response !== "yesButtonClicked") {
-				// this will never happen since if noButtonClicked, we will clear current task, aborting this instance
 				throw new Error("API request failed")
 			}
 			await this.say("api_req_retried")
-			// delegate generator output from the recursive call
 			yield* this.attemptApiRequest(previousApiReqIndex)
-			return
 		}
-
-		// no error, so we can continue to yield all remaining chunks
-		// (needs to be placed outside of try/catch since it we want caller to handle errors not with api_req_failed as that is reserved for first chunk failures only)
-		// this delegates to another generator or iterable object. In this case, it's saying "yield all remaining values from this iterator". This effectively passes along all subsequent chunks from the original stream.
-		yield* iterator
 	}
 
 	async presentAssistantMessage() {
@@ -3193,5 +3200,20 @@ export class Cline {
 	// Add a method to clear tool call history
 	public clearToolCallHistory(): void {
 		this.toolCallOptimizationAgent.clearHistory();
+	}
+
+	// Add method to abort API request
+	abortApiRequest() {
+		this.abortSubject.next(true);
+		this.abortSubject.complete();
+		// Reinitialize the subject for future use
+		this.abortSubject = new Subject<boolean>();
+	}
+
+	// Expose stream progress
+	async getApiRequestProgress() {
+		return firstValueFrom(
+			this.apiRequestService.getStreamController().getProgress()
+		);
 	}
 }
