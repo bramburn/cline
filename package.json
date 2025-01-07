@@ -217,6 +217,8 @@
 		"uuid": "^11.0.4",
 		"vitest": "^2.1.8",
 		"web-tree-sitter": "^0.22.6",
-		"zod": "^3.23.8"
+		"zod": "^3.23.8",
+		"inversify": "^6.0.1",
+		"reflect-metadata": "^0.2.1"
 	}
 }
