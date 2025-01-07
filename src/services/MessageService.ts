@@ -1,43 +1,33 @@
 import { Observable, Subject, from } from 'rxjs';
 import { map, catchError, tap, switchMap } from 'rxjs/operators';
 import { ClineMessage, ClineAsk, ClineSay, ClineAskResponse } from '../shared/ExtensionMessage';
-import { ConversationStateService } from './ConversationStateService';
-import { HistoryItem } from '../shared/HistoryItem';
+import { ReactiveConversationHistoryService } from './ReactiveConversationHistoryService';
+import { MessageProcessingPipeline } from './MessageProcessingPipeline';
 
 export class MessageService {
-  private messageSubject: Subject<ClineMessage>;
-  private conversationState: ConversationStateService;
+  private processingPipeline: MessageProcessingPipeline;
+  private conversationHistoryService: ReactiveConversationHistoryService;
 
-  constructor(historyItem?: HistoryItem) {
-    this.messageSubject = new Subject<ClineMessage>();
-    this.conversationState = new ConversationStateService(historyItem);
+  constructor(conversationHistoryService: ReactiveConversationHistoryService) {
+    this.processingPipeline = new MessageProcessingPipeline();
+    this.conversationHistoryService = conversationHistoryService;
   }
 
-  ask(type: ClineAsk, text?: string, partial?: boolean): Observable<{
-    response: ClineAskResponse;
-    text?: string;
-    images?: string[];
-  }> {
+  ask(type: ClineAsk, text?: string): Observable<ClineAskResponse> {
     const message: ClineMessage = {
       ts: Date.now(),
       type: 'ask',
       ask: type,
       text,
-      partial
     };
 
-    return from(this.processAskMessage(message)).pipe(
-      tap(() => {
-        this.conversationState.setProcessing(true);
-        this.conversationState.updateMessage(message);
+    return from(this.processingPipeline.processMessage(message)).pipe(
+      switchMap(async (processedMessage) => {
+        await this.conversationHistoryService.addMessage(processedMessage);
+        return { response: 'messageResponse', text: '', images: [] }; // Mock response
       }),
-      switchMap(async (response) => {
-        this.conversationState.setAskResponse(response.response, response.text, response.images);
-        return response;
-      }),
-      tap(() => this.conversationState.setProcessing(false)),
       catchError(error => {
-        this.handleError(error);
+        console.error('Error processing ask message:', error);
         throw error;
       })
     );
@@ -55,17 +45,16 @@ export class MessageService {
 
     return from(Promise.resolve()).pipe(
       tap(() => {
-        this.conversationState.setProcessing(true);
-        this.conversationState.updateMessage(message);
+        this.conversationHistoryService.setProcessing(true);
+        this.conversationHistoryService.updateMessage(message);
       }),
-      tap(() => this.conversationState.setProcessing(false)),
+      tap(() => this.conversationHistoryService.setProcessing(false)),
       catchError(error => {
         this.handleError(error);
         throw error;
       })
     );
   }
-
   private async processAskMessage(message: ClineMessage): Promise<{
     response: ClineAskResponse;
     text?: string;
@@ -78,39 +67,38 @@ export class MessageService {
       images: []
     };
   }
-
   private handleError(error: any) {
-    this.conversationState.setError(error.message || 'An error occurred');
-    this.conversationState.setProcessing(false);
+    this.conversationHistoryService.setError(error.message || 'An error occurred');
+    this.conversationHistoryService.setProcessing(false);
   }
 
   getState(): Observable<ConversationState> {
-    return this.conversationState.getState();
+    return this.conversationHistoryService.getState();
   }
 
   getMessages(): Observable<ClineMessage[]> {
-    return this.conversationState.getMessages();
+    return this.conversationHistoryService.getMessages();
   }
 
   updatePartialMessage(message: ClineMessage) {
     if (message.partial) {
-      const currentState = this.conversationState.getCurrentState();
+      const currentState = this.conversationHistoryService.getCurrentState();
       const lastMessage = currentState.messages[currentState.messages.length - 1];
       
       if (lastMessage && lastMessage.partial && 
           lastMessage.type === message.type &&
           ((lastMessage.ask && message.ask && lastMessage.ask === message.ask) ||
            (lastMessage.say && message.say && lastMessage.say === message.say))) {
-        this.conversationState.updateMessage({
+        this.conversationHistoryService.updateMessage({
           ...lastMessage,
           text: message.text,
           images: message.images
         });
       } else {
-        this.conversationState.updateMessage(message);
+        this.conversationHistoryService.updateMessage(message);
       }
     } else {
-      this.conversationState.updateMessage(message);
+      this.conversationHistoryService.updateMessage(message);
     }
   }
 } 

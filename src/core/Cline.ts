@@ -65,6 +65,7 @@ import { MessageService } from '../services/MessageService';
 import { ConversationStateService } from '../services/ConversationStateService';
 import { ToolCallOptimizationAgent } from './agents/ToolCallOptimizationAgent';
 import { PatternAnalysis, ErrorReport } from '../types/ToolCallOptimization';
+import { StreamController } from '../services/StreamController';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -100,6 +101,7 @@ export class Cline {
 	conversationHistoryDeletedRange?: [number, number]
 	isInitialized = false
 	private toolCallOptimizationAgent: ToolCallOptimizationAgent;
+	private streamController: StreamController;
 
 	// streaming
 	isStreaming = false
@@ -136,6 +138,7 @@ export class Cline {
 		this.customInstructions = customInstructions
 		this.autoApprovalSettings = autoApprovalSettings
 		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
+		this.streamController = new StreamController();
 		if (historyItem) {
 			this.taskId = historyItem.id
 			this.conversationHistoryDeletedRange = historyItem.conversationHistoryDeletedRange
@@ -2616,218 +2619,234 @@ export class Cline {
 		includeFileDetails: boolean = false,
 		isNewTask: boolean = false,
 	): Promise<boolean> {
-		if (this.abort) {
-			throw new Error("Cline instance aborted")
-		}
-
-		if (this.consecutiveMistakeCount >= 3) {
-			if (this.autoApprovalSettings.enabled && this.autoApprovalSettings.enableNotifications) {
-				showSystemNotification({
-					subtitle: "Error",
-					message: "Cline is having trouble. Would you like to continue the task?",
-				})
-			}
-			const { response, text, images } = await this.ask(
-				"mistake_limit_reached",
-				this.api.getModel().id.includes("claude")
-					? `This may indicate a failure in his thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
-					: "Cline uses complex prompts and iterative task execution that may be challenging for less capable models. For best results, it's recommended to use Claude 3.5 Sonnet for its advanced agentic coding capabilities.",
-			)
-			if (response === "messageResponse") {
-				userContent.push(
-					...[
-						{
-							type: "text",
-							text: formatResponse.tooManyMistakes(text),
-						} as Anthropic.Messages.TextBlockParam,
-						...formatResponse.imageBlocks(images),
-					],
-				)
-			}
-			this.consecutiveMistakeCount = 0
-		}
-
-		if (
-			this.autoApprovalSettings.enabled &&
-			this.consecutiveAutoApprovedRequestsCount >= this.autoApprovalSettings.maxRequests
-		) {
-			if (this.autoApprovalSettings.enableNotifications) {
-				showSystemNotification({
-					subtitle: "Max Requests Reached",
-					message: `Cline has auto-approved ${this.autoApprovalSettings.maxRequests.toString()} API requests.`,
-				})
-			}
-			await this.ask(
-				"auto_approval_max_req_reached",
-				`Cline has auto-approved ${this.autoApprovalSettings.maxRequests.toString()} API requests. Would you like to reset the count and proceed with the task?`,
-			)
-			// if we get past the promise it means the user approved and did not start a new task
-			this.consecutiveAutoApprovedRequestsCount = 0
-		}
-
-		// get previous api req's index to check token usage and determine if we need to truncate conversation history
-		const previousApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
-
-		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
-		// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens
-		await this.say(
-			"api_req_started",
-			JSON.stringify({
-				request: userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n") + "\n\nLoading...",
-			}),
-		)
-
-		// use this opportunity to initialize the checkpoint tracker (can be expensive to initialize in the constructor)
-		// FIXME: right now we're letting users init checkpoints for old tasks, but this could be a problem if opening a task in the wrong workspace
-		// isNewTask &&
-		if (!this.checkpointTracker) {
-			try {
-				this.checkpointTracker = await CheckpointTracker.create(this.taskId, this.providerRef.deref())
-				this.checkpointTrackerErrorMessage = undefined
-			} catch (error) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error"
-				console.error("Failed to initialize checkpoint tracker:", errorMessage)
-				this.checkpointTrackerErrorMessage = errorMessage // will be displayed right away since we saveClineMessages next which posts state to webview
-			}
-		}
-
-		const [parsedUserContent, environmentDetails] = await this.loadContext(userContent, includeFileDetails)
-		userContent = parsedUserContent
-		// add environment details as its own text block, separate from tool results
-		userContent.push({ type: "text", text: environmentDetails })
-
-		await this.addToApiConversationHistory({
-			role: "user",
-			content: userContent,
-		})
-
-		// since we sent off a placeholder api_req_started message to update the webview while waiting to actually start the API request (to load potential details for example), we need to update the text of that message
-		const lastApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
-		this.clineMessages[lastApiReqIndex].text = JSON.stringify({
-			request: userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n"),
-		} satisfies ClineApiReqInfo)
-		await this.saveClineMessages()
-		await this.providerRef.deref()?.postStateToWebview()
-
 		try {
-			let cacheWriteTokens = 0
-			let cacheReadTokens = 0
-			let inputTokens = 0
-			let outputTokens = 0
-			let totalCost: number | undefined
+			// Update the stream progress
+			this.streamController.updateProgress({ status: 'processing', processed: 0 });
 
-			// update api_req_started. we can't use api_req_finished anymore since it's a unique case where it could come after a streaming message (ie in the middle of being updated or executed)
-			// fortunately api_req_finished was always parsed out for the gui anyways, so it remains solely for legacy purposes to keep track of prices in tasks from history
-			// (it's worth removing a few months from now)
-			const updateApiReqMsg = (cancelReason?: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
-				this.clineMessages[lastApiReqIndex].text = JSON.stringify({
-					...JSON.parse(this.clineMessages[lastApiReqIndex].text || "{}"),
-					tokensIn: inputTokens,
-					tokensOut: outputTokens,
-					cacheWrites: cacheWriteTokens,
-					cacheReads: cacheReadTokens,
-					cost:
-						totalCost ??
-						calculateApiCost(this.api.getModel().info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens),
-					cancelReason,
-					streamingFailedMessage,
-				} satisfies ClineApiReqInfo)
+			if (this.abort) {
+				throw new Error("Cline instance aborted")
 			}
 
-			const abortStream = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
-				if (this.diffViewProvider.isEditing) {
-					await this.diffViewProvider.revertChanges() // closes diff view
+			if (this.consecutiveMistakeCount >= 3) {
+				if (this.autoApprovalSettings.enabled && this.autoApprovalSettings.enableNotifications) {
+					showSystemNotification({
+						subtitle: "Error",
+						message: "Cline is having trouble. Would you like to continue the task?",
+					})
 				}
-
-				// if last message is a partial we need to update and save it
-				const lastMessage = this.clineMessages.at(-1)
-				if (lastMessage && lastMessage.partial) {
-					// lastMessage.ts = Date.now() DO NOT update ts since it is used as a key for virtuoso list
-					lastMessage.partial = false
-					// instead of streaming partialMessage events, we do a save and post like normal to persist to disk
-					console.log("updating partial message", lastMessage)
-					// await this.saveClineMessages()
+				const { response, text, images } = await this.ask(
+					"mistake_limit_reached",
+					this.api.getModel().id.includes("claude")
+						? `This may indicate a failure in his thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
+						: "Cline uses complex prompts and iterative task execution that may be challenging for less capable models. For best results, it's recommended to use Claude 3.5 Sonnet for its advanced agentic coding capabilities.",
+				)
+				if (response === "messageResponse") {
+					userContent.push(
+						...[
+							{
+								type: "text",
+								text: formatResponse.tooManyMistakes(text),
+							} as Anthropic.Messages.TextBlockParam,
+							...formatResponse.imageBlocks(images),
+						],
+					)
 				}
-
-				// Let assistant know their response was interrupted for when task is resumed
-				await this.addToApiConversationHistory({
-					role: "assistant",
-					content: [
-						{
-							type: "text",
-							text:
-								assistantMessage +
-								`\n\n[${
-									cancelReason === "streaming_failed"
-										? "Response interrupted by API Error"
-										: "Response interrupted by user"
-								}]`,
-						},
-					],
-				})
-
-				// update api_req_started to have cancelled and cost, so that we can display the cost of the partial stream
-				updateApiReqMsg(cancelReason, streamingFailedMessage)
-				await this.saveClineMessages()
-
-				// signals to provider that it can retrieve the saved messages from disk, as abortTask can not be awaited on in nature
-				this.didFinishAbortingStream = true
+				this.consecutiveMistakeCount = 0
 			}
 
-			// reset streaming state
-			this.currentStreamingContentIndex = 0
-			this.assistantMessageContent = []
-			this.didCompleteReadingStream = false
-			this.userMessageContent = []
-			this.userMessageContentReady = false
-			this.didRejectTool = false
-			this.didAlreadyUseTool = false
-			this.presentAssistantMessageLocked = false
-			this.presentAssistantMessageHasPendingUpdates = false
-			await this.diffViewProvider.reset()
+			if (
+				this.autoApprovalSettings.enabled &&
+				this.consecutiveAutoApprovedRequestsCount >= this.autoApprovalSettings.maxRequests
+			) {
+				if (this.autoApprovalSettings.enableNotifications) {
+					showSystemNotification({
+						subtitle: "Max Requests Reached",
+						message: `Cline has auto-approved ${this.autoApprovalSettings.maxRequests.toString()} API requests.`,
+					})
+				}
+				await this.ask(
+					"auto_approval_max_req_reached",
+					`Cline has auto-approved ${this.autoApprovalSettings.maxRequests.toString()} API requests. Would you like to reset the count and proceed with the task?`,
+				)
+				// if we get past the promise it means the user approved and did not start a new task
+				this.consecutiveAutoApprovedRequestsCount = 0
+			}
 
-			const stream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
-			let assistantMessage = ""
-			this.isStreaming = true
+			// get previous api req's index to check token usage and determine if we need to truncate conversation history
+			const previousApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
+
+			// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
+			// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens
+			await this.say(
+				"api_req_started",
+				JSON.stringify({
+					request: userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n") + "\n\nLoading...",
+				}),
+			)
+
+			// use this opportunity to initialize the checkpoint tracker (can be expensive to initialize in the constructor)
+			// FIXME: right now we're letting users init checkpoints for old tasks, but this could be a problem if opening a task in the wrong workspace
+			// isNewTask &&
+			if (!this.checkpointTracker) {
+				try {
+					this.checkpointTracker = await CheckpointTracker.create(this.taskId, this.providerRef.deref())
+					this.checkpointTrackerErrorMessage = undefined
+				} catch (error) {
+					const errorMessage = error instanceof Error ? error.message : "Unknown error"
+					console.error("Failed to initialize checkpoint tracker:", errorMessage)
+					this.checkpointTrackerErrorMessage = errorMessage // will be displayed right away since we saveClineMessages next which posts state to webview
+				}
+			}
+
+			const [parsedUserContent, environmentDetails] = await this.loadContext(userContent, includeFileDetails)
+			userContent = parsedUserContent
+			// add environment details as its own text block, separate from tool results
+			userContent.push({ type: "text", text: environmentDetails })
+
+			await this.addToApiConversationHistory({
+				role: "user",
+				content: userContent,
+			})
+
+			// since we sent off a placeholder api_req_started message to update the webview while waiting to actually start the API request (to load potential details for example), we need to update the text of that message
+			const lastApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
+			this.clineMessages[lastApiReqIndex].text = JSON.stringify({
+				request: userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n"),
+			} satisfies ClineApiReqInfo)
+			await this.saveClineMessages()
+			await this.providerRef.deref()?.postStateToWebview()
+
 			try {
-				for await (const chunk of stream) {
-					switch (chunk.type) {
-						case "usage":
-							inputTokens += chunk.inputTokens
-							outputTokens += chunk.outputTokens
-							cacheWriteTokens += chunk.cacheWriteTokens ?? 0
-							cacheReadTokens += chunk.cacheReadTokens ?? 0
-							totalCost = chunk.totalCost
-							break
-						case "text":
-							assistantMessage += chunk.text
-							// parse raw assistant message into content blocks
-							const prevLength = this.assistantMessageContent.length
-							this.assistantMessageContent = parseAssistantMessage(assistantMessage)
-							if (this.assistantMessageContent.length > prevLength) {
-								this.userMessageContentReady = false // new content we need to present, reset to false in case previous content set this to true
-							}
-							// present content to user
-							this.presentAssistantMessage()
-							break
+				let cacheWriteTokens = 0
+				let cacheReadTokens = 0
+				let inputTokens = 0
+				let outputTokens = 0
+				let totalCost: number | undefined
+
+				// update api_req_started. we can't use api_req_finished anymore since it's a unique case where it could come after a streaming message (ie in the middle of being updated or executed)
+				// fortunately api_req_finished was always parsed out for the gui anyways, so it remains solely for legacy purposes to keep track of prices in tasks from history
+				// (it's worth removing a few months from now)
+				const updateApiReqMsg = (cancelReason?: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
+					this.clineMessages[lastApiReqIndex].text = JSON.stringify({
+						...JSON.parse(this.clineMessages[lastApiReqIndex].text || "{}"),
+						tokensIn: inputTokens,
+						tokensOut: outputTokens,
+						cacheWrites: cacheWriteTokens,
+						cacheReads: cacheReadTokens,
+						cost:
+							totalCost ??
+							calculateApiCost(this.api.getModel().info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens),
+						cancelReason,
+						streamingFailedMessage,
+					} satisfies ClineApiReqInfo)
+				}
+
+				const abortStream = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
+					if (this.diffViewProvider.isEditing) {
+						await this.diffViewProvider.revertChanges() // closes diff view
 					}
 
-					if (this.abort) {
-						console.log("aborting stream...")
-						if (!this.abandoned) {
-							// only need to gracefully abort if this instance isn't abandoned (sometimes openrouter stream hangs, in which case this would affect future instances of cline)
-							await abortStream("user_cancelled")
+					// if last message is a partial we need to update and save it
+					const lastMessage = this.clineMessages.at(-1)
+					if (lastMessage && lastMessage.partial) {
+						// lastMessage.ts = Date.now() DO NOT update ts since it is used as a key for virtuoso list
+						lastMessage.partial = false
+						// instead of streaming partialMessage events, we do a save and post like normal to persist to disk
+						console.log("updating partial message", lastMessage)
+						// await this.saveClineMessages()
+					}
+
+					// Let assistant know their response was interrupted for when task is resumed
+					await this.addToApiConversationHistory({
+						role: "assistant",
+						content: [
+							{
+								type: "text",
+								text:
+									assistantMessage +
+									`\n\n[${
+										cancelReason === "streaming_failed"
+											? "Response interrupted by API Error"
+											: "Response interrupted by user"
+									}]`,
+							},
+						],
+					})
+
+					// update api_req_started to have cancelled and cost, so that we can display the cost of the partial stream
+					updateApiReqMsg(cancelReason, streamingFailedMessage)
+					await this.saveClineMessages()
+
+					// signals to provider that it can retrieve the saved messages from disk, as abortTask can not be awaited on in nature
+					this.didFinishAbortingStream = true
+				}
+
+				// reset streaming state
+				this.currentStreamingContentIndex = 0
+				this.assistantMessageContent = []
+				this.didCompleteReadingStream = false
+				this.userMessageContent = []
+				this.userMessageContentReady = false
+				this.didRejectTool = false
+				this.didAlreadyUseTool = false
+				this.presentAssistantMessageLocked = false
+				this.presentAssistantMessageHasPendingUpdates = false
+				await this.diffViewProvider.reset()
+
+				const stream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+				let assistantMessage = ""
+				this.isStreaming = true
+				try {
+					for await (const chunk of stream) {
+						switch (chunk.type) {
+							case "usage":
+								inputTokens += chunk.inputTokens
+								outputTokens += chunk.outputTokens
+								cacheWriteTokens += chunk.cacheWriteTokens ?? 0
+								cacheReadTokens += chunk.cacheReadTokens ?? 0
+								totalCost = chunk.totalCost
+								break
+							case "text":
+								assistantMessage += chunk.text
+								// parse raw assistant message into content blocks
+								const prevLength = this.assistantMessageContent.length
+								this.assistantMessageContent = parseAssistantMessage(assistantMessage)
+								if (this.assistantMessageContent.length > prevLength) {
+									this.userMessageContentReady = false // new content we need to present, reset to false in case previous content set this to true
+								}
+								// present content to user
+								this.presentAssistantMessage()
+								break
 						}
-						break // aborts the stream
-					}
 
-					if (this.didRejectTool) {
-						// userContent has a tool rejection, so interrupt the assistant's response to present the user's feedback
-						assistantMessage += "\n\n[Response interrupted by user feedback]"
-						// this.userMessageContentReady = true // instead of setting this premptively, we allow the present iterator to finish and set userMessageContentReady when its ready
-						break
-					}
+						if (this.abort) {
+							console.log("aborting stream...")
+							if (!this.abandoned) {
+								// only need to gracefully abort if this instance isn't abandoned (sometimes openrouter stream hangs, in which case this would affect future instances of cline)
+								await abortStream("user_cancelled")
+							}
+							break // aborts the stream
+						}
 
+						if (this.didRejectTool) {
+							// userContent has a tool rejection, so interrupt the assistant's response to present the user's feedback
+							assistantMessage += "\n\n[Response interrupted by user feedback]"
+							// this.userMessageContentReady = true // instead of setting this premptively, we allow the present iterator to finish and set userMessageContentReady when its ready
+							break
+						}
+
+						// PREV: we need to let the request finish for openrouter to get generation details
+						// UPDATE: it's better UX to interrupt the request at the cost of the api cost not being retrieved
+						if (this.didAlreadyUseTool) {
+							assistantMessage +=
+								"\n\n[Response interrupted by a tool use result. Only one tool may be used at a time and should be placed at the end of the message.]"
+							break
+						}
+					}
+				} catch (error) {
+					// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
+					if (!this.abandoned) {
+						this.abortTask() // if the stream failed, there's various states the task could be in (i.e. could have streamed some tools the user may have executed), so we just resort to replicating a cancel task
 					// PREV: we need to let the request finish for openrouter to get generation details
 					// UPDATE: it's better UX to interrupt the request at the cost of the api cost not being retrieved
 					if (this.didAlreadyUseTool) {

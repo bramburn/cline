@@ -1,118 +1,98 @@
 import { BehaviorSubject, Observable, Subject, filter, map, shareReplay } from 'rxjs';
 import { ClineMessage } from '../shared/ExtensionMessage';
-import { HistoryItem } from '../shared/HistoryItem';
 
 export interface ReactiveConversationState {
   messages: ClineMessage[];
-  lastMessageTs?: number;
   isProcessing: boolean;
   error?: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface MessageEvent {
   type: 'add' | 'update' | 'delete';
   message: ClineMessage;
-  timestamp: number;
 }
 
 export class ReactiveConversationHistoryService {
-  private stateSubject: BehaviorSubject<ReactiveConversationState>;
-  private messageEvents: Subject<MessageEvent>;
-  private readonly MAX_MESSAGES = 1000;
+  private stateSubject = new BehaviorSubject<ReactiveConversationState>({
+    messages: [],
+    isProcessing: false
+  });
 
-  constructor(historyItem?: HistoryItem) {
-    this.stateSubject = new BehaviorSubject<ReactiveConversationState>({
-      messages: historyItem?.messages || [],
-      isProcessing: false
-    });
-    
-    this.messageEvents = new Subject<MessageEvent>();
-    this.initializeMessageEventHandler();
+  private messageEventSubject = new Subject<MessageEvent>();
+
+  private MAX_MESSAGES = 100; // Prevent excessive memory usage
+
+  constructor() {
+    // Set up message event processing
+    this.messageEventSubject
+      .pipe(
+        map(event => {
+          const currentState = this.stateSubject.value;
+          let updatedMessages = [...currentState.messages];
+
+          switch (event.type) {
+            case 'add':
+              updatedMessages.push(event.message);
+              // Maintain maximum message limit
+              if (updatedMessages.length > this.MAX_MESSAGES) {
+                updatedMessages.shift();
+              }
+              break;
+            case 'update':
+              const index = updatedMessages.findIndex(m => m.ts === event.message.ts);
+              if (index !== -1) {
+                updatedMessages[index] = event.message;
+              }
+              break;
+            case 'delete':
+              updatedMessages = updatedMessages.filter(m => m.ts !== event.message.ts);
+              break;
+          }
+
+          return {
+            ...currentState,
+            messages: updatedMessages
+          };
+        })
+      )
+      .subscribe(newState => this.stateSubject.next(newState));
   }
 
-  private initializeMessageEventHandler(): void {
-    this.messageEvents.pipe(
-      filter(event => !!event.message)
-    ).subscribe(event => {
-      const currentState = this.stateSubject.value;
-      const messages = [...currentState.messages];
-
-      switch (event.type) {
-        case 'add':
-          if (messages.length >= this.MAX_MESSAGES) {
-            messages.shift(); // Remove oldest message if limit reached
-          }
-          messages.push(event.message);
-          break;
-        case 'update':
-          const index = messages.findIndex(m => m.ts === event.message.ts);
-          if (index !== -1) {
-            messages[index] = event.message;
-          }
-          break;
-        case 'delete':
-          const deleteIndex = messages.findIndex(m => m.ts === event.message.ts);
-          if (deleteIndex !== -1) {
-            messages.splice(deleteIndex, 1);
-          }
-          break;
-      }
-
-      this.stateSubject.next({
-        ...currentState,
-        messages,
-        lastMessageTs: event.timestamp
-      });
-    });
-  }
-
+  // Add a new message
   addMessage(message: ClineMessage): void {
-    this.messageEvents.next({
-      type: 'add',
-      message,
-      timestamp: Date.now()
-    });
+    this.messageEventSubject.next({ type: 'add', message });
   }
 
+  // Update an existing message
   updateMessage(message: ClineMessage): void {
-    this.messageEvents.next({
-      type: 'update',
-      message,
-      timestamp: Date.now()
-    });
+    this.messageEventSubject.next({ type: 'update', message });
   }
 
+  // Delete a message
   deleteMessage(message: ClineMessage): void {
-    this.messageEvents.next({
-      type: 'delete',
-      message,
-      timestamp: Date.now()
-    });
+    this.messageEventSubject.next({ type: 'delete', message });
   }
 
+  // Set processing state
   setProcessing(isProcessing: boolean): void {
     const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
-      isProcessing
-    });
+    this.stateSubject.next({ ...currentState, isProcessing });
   }
 
-  setError(error: string | undefined): void {
+  // Set error state
+  setError(error?: string): void {
     const currentState = this.stateSubject.value;
-    this.stateSubject.next({
-      ...currentState,
-      error
-    });
+    this.stateSubject.next({ ...currentState, error });
   }
 
+  // Get current state as an observable
   getState(): Observable<ReactiveConversationState> {
     return this.stateSubject.asObservable().pipe(
       shareReplay(1)
     );
   }
 
+  // Get messages as an observable
   getMessages(): Observable<ClineMessage[]> {
     return this.getState().pipe(
       map(state => state.messages),
@@ -120,12 +100,13 @@ export class ReactiveConversationHistoryService {
     );
   }
 
-  getCurrentState(): ReactiveConversationState {
-    return this.stateSubject.value;
+  // Dispose of the service
+  dispose(): void {
+    this.stateSubject.complete();
+    this.messageEventSubject.complete();
   }
 
-  dispose(): void {
-    this.messageEvents.complete();
-    this.stateSubject.complete();
+  getCurrentState(): ReactiveConversationState {
+    return this.stateSubject.value;
   }
 } 

@@ -153,3 +153,8 @@ export interface ClineApiReqInfo {
 export type ClineApiReqCancelReason = "streaming_failed" | "user_cancelled"
 
 export const COMPLETION_RESULT_CHANGES_FLAG = "HAS_CHANGES"
+
+export type ClineAskResponse = 
+	| 'messageResponse' 
+	| 'yesButtonClicked' 
+	| 'noButtonClicked';
