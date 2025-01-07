@@ -1,15 +1,25 @@
 import { BehaviorSubject, Observable } from 'rxjs';
 import { Anthropic } from '@anthropic-ai/sdk';
+import { AssistantMessageContent } from '../core/assistant-message';
 
-export interface AssistantMessageContent {
-  type: string;
-  content?: string;
-  partial?: boolean;
-  name?: string;
-  params?: Record<string, any>;
+// Type guard for UserContentBlock
+function isValidUserContentBlock(block: any): block is UserContentBlock {
+  return block && 
+    'type' in block && 
+    ['text', 'image', 'tool_use', 'tool_result'].includes(block.type);
 }
 
+// Type definition for UserContentBlock and UserContent
+type UserContentBlock = 
+  | Anthropic.TextBlockParam 
+  | Anthropic.ImageBlockParam 
+  | Anthropic.ToolUseBlockParam 
+  | Anthropic.ToolResultBlockParam;
+
+type UserContent = UserContentBlock[];
+
 export class ClineStateService {
+  // Existing state subjects
   private isStreamingSubject = new BehaviorSubject<boolean>(false);
   private abortSubject = new BehaviorSubject<boolean>(false);
   private didCompleteReadingStreamSubject = new BehaviorSubject<boolean>(false);
@@ -17,7 +27,7 @@ export class ClineStateService {
   private didRejectToolSubject = new BehaviorSubject<boolean>(false);
   private didAlreadyUseToolSubject = new BehaviorSubject<boolean>(false);
   private assistantMessageContentSubject = new BehaviorSubject<AssistantMessageContent[]>([]);
-  private userMessageContentSubject = new BehaviorSubject<(Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]>([]);
+  private userMessageContentSubject = new BehaviorSubject<UserContent>([]);
   private presentAssistantMessageLockedSubject = new BehaviorSubject<boolean>(false);
   private presentAssistantMessageHasPendingUpdatesSubject = new BehaviorSubject<boolean>(false);
   private currentStreamingContentIndexSubject = new BehaviorSubject<number>(0);
@@ -44,7 +54,7 @@ export class ClineStateService {
     return this.abortSubject.value;
   }
 
-  // Setter methods
+  // Setter methods with enhanced type safety
   setIsStreaming(value: boolean): void {
     this.isStreamingSubject.next(value);
   }
@@ -65,13 +75,34 @@ export class ClineStateService {
     this.didAlreadyUseToolSubject.next(value);
   }
 
+  // Enhanced method for setting user message content
+  setCurrentUserMessageContent(content: UserContent): void {
+    // Validate the content before setting
+    if (this.isValidUserContent(content)) {
+      this.userMessageContentSubject.next(content);
+    } else {
+      console.warn('Invalid user content provided', content);
+    }
+  }
+
+  // Type guard method for UserContent
+  isValidUserContent(content: any): content is UserContent {
+    return Array.isArray(content) && 
+      content.every(block => isValidUserContentBlock(block));
+  }
+
+  // Getter methods
+  get userMessageContentReady(): boolean {
+    return this.userMessageContentReadySubject.value;
+  }
+
+  get userMessageContent(): UserContent {
+    return this.userMessageContentSubject.value;
+  }
+
   // New methods for additional state management
   setCurrentAssistantMessageContent(content: AssistantMessageContent[]): void {
     this.assistantMessageContentSubject.next(content);
-  }
-
-  setCurrentUserMessageContent(content: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]): void {
-    this.userMessageContentSubject.next(content);
   }
 
   setPresentAssistantMessageLocked(value: boolean): void {
@@ -114,10 +145,6 @@ export class ClineStateService {
   // New getter methods for additional state
   getCurrentAssistantMessageContent(): AssistantMessageContent[] {
     return this.assistantMessageContentSubject.value;
-  }
-
-  getCurrentUserMessageContent(): (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] {
-    return this.userMessageContentSubject.value;
   }
 
   getCurrentPresentAssistantMessageLocked(): boolean {
