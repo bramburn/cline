@@ -1,19 +1,26 @@
+import { injectable, inject } from 'inversify';
 import { ToolUseName } from '../core/assistant-message';
-import { 
-  ErrorCategory, 
-  ErrorReport, 
-  ToolCallPattern, 
-  ToolCallSuggestion 
-} from '../types/ToolCallOptimization';
+import { ToolCallPattern } from '../types/ToolCallOptimization';
 import { ToolCallPatternAnalyzer } from './ToolCallPatternAnalyzer';
+import {
+  ErrorCategory,
+  ErrorContext,
+  ErrorReport,
+  ErrorSuggestion,
+  ErrorReportingConfig
+} from '../types/ErrorReporting';
 
+@injectable()
 export class ErrorReportingService {
-  private readonly patternAnalyzer: ToolCallPatternAnalyzer;
   private readonly errorHistory: ErrorReport[] = [];
+  private readonly config: ErrorReportingConfig = {
+    maxHistorySize: 1000,
+    suggestionConfidenceThreshold: 0.6
+  };
 
-  constructor(patternAnalyzer: ToolCallPatternAnalyzer) {
-    this.patternAnalyzer = patternAnalyzer;
-  }
+  constructor(
+    @inject(ToolCallPatternAnalyzer) private patternAnalyzer: ToolCallPatternAnalyzer
+  ) {}
 
   public generateErrorReport(
     error: Error,
@@ -34,7 +41,7 @@ export class ErrorReportingService {
       suggestions: this.generateSuggestions(category, toolName, parameters)
     };
 
-    this.errorHistory.push(report);
+    this.addToHistory(report);
     return report;
   }
 
@@ -91,8 +98,8 @@ export class ErrorReportingService {
     category: ErrorCategory,
     toolName: ToolUseName,
     parameters: Record<string, string>
-  ): ToolCallSuggestion[] {
-    const suggestions: ToolCallSuggestion[] = [];
+  ): ErrorSuggestion[] {
+    const suggestions: ErrorSuggestion[] = [];
     const analysis = this.patternAnalyzer.analyzePatterns(toolName);
 
     // Add suggestions from pattern analysis
@@ -111,14 +118,14 @@ export class ErrorReportingService {
         break;
     }
 
-    return suggestions;
+    return suggestions.filter(s => s.confidence >= this.config.suggestionConfidenceThreshold);
   }
 
   private getInvalidParameterSuggestions(
     toolName: ToolUseName,
     parameters: Record<string, string>
-  ): ToolCallSuggestion[] {
-    const suggestions: ToolCallSuggestion[] = [];
+  ): ErrorSuggestion[] {
+    const suggestions: ErrorSuggestion[] = [];
 
     if (parameters.regex) {
       suggestions.push({
@@ -150,8 +157,8 @@ export class ErrorReportingService {
   private getMissingParameterSuggestions(
     toolName: ToolUseName,
     parameters: Record<string, string>
-  ): ToolCallSuggestion[] {
-    const suggestions: ToolCallSuggestion[] = [];
+  ): ErrorSuggestion[] {
+    const suggestions: ErrorSuggestion[] = [];
     const requiredParams = this.getRequiredParameters(toolName);
     const missingParams = requiredParams.filter(param => !parameters[param]);
 
@@ -175,8 +182,8 @@ export class ErrorReportingService {
   private getResourceNotFoundSuggestions(
     toolName: ToolUseName,
     parameters: Record<string, string>
-  ): ToolCallSuggestion[] {
-    const suggestions: ToolCallSuggestion[] = [];
+  ): ErrorSuggestion[] {
+    const suggestions: ErrorSuggestion[] = [];
 
     if (parameters.path) {
       // Try parent directory
@@ -240,11 +247,18 @@ export class ErrorReportingService {
     }
   }
 
+  private addToHistory(report: ErrorReport): void {
+    this.errorHistory.unshift(report);
+    if (this.errorHistory.length > this.config.maxHistorySize) {
+      this.errorHistory.pop();
+    }
+  }
+
   public getErrorHistory(): ErrorReport[] {
     return [...this.errorHistory];
   }
 
   public clearHistory(): void {
-    this.errorHistory = [];
+    this.errorHistory.length = 0;
   }
 } 

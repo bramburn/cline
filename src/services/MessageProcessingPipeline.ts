@@ -121,4 +121,34 @@ export class MessageProcessingPipeline {
     this.clearTransformations();
     this.clearValidations();
   }
+
+  public static nonEmptyContent: MessageValidation = {
+    name: 'nonEmptyContent',
+    validate: (msg) => !!msg.content && msg.content.trim().length > 0,
+    errorMessage: 'Message content cannot be empty'
+  };
+
+  public static maxLength(maxLen: number): MessageValidation {
+    return {
+      name: `maxLength_${maxLen}`,
+      validate: (msg) => (msg.content?.length || 0) <= maxLen,
+      errorMessage: `Message content must be no longer than ${maxLen} characters`
+    };
+  }
+
+  public static trimContent: MessageTransformation = {
+    name: 'trimContent',
+    transform: (msg) => ({
+      ...msg,
+      content: msg.content?.trim() || ''
+    })
+  };
+
+  public static removeExcessiveWhitespace: MessageTransformation = {
+    name: 'removeExcessiveWhitespace',
+    transform: (msg) => ({
+      ...msg,
+      content: msg.content?.replace(/\s+/g, ' ').trim() || ''
+    })
+  };
 } 

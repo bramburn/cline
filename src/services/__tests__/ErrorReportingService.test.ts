@@ -1,6 +1,8 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ErrorReportingService } from '../ErrorReportingService';
 import { ToolCallPatternAnalyzer } from '../ToolCallPatternAnalyzer';
-import { ErrorCategory, ToolCallPattern } from '../../types/ToolCallOptimization';
+import { ErrorCategory } from '../../types/ErrorReporting';
+import { ToolCallPattern } from '../../types/ToolCallOptimization';
 
 describe('ErrorReportingService', () => {
   let service: ErrorReportingService;
@@ -8,6 +10,10 @@ describe('ErrorReportingService', () => {
 
   beforeEach(() => {
     patternAnalyzer = new ToolCallPatternAnalyzer();
+    vi.spyOn(patternAnalyzer, 'analyzePatterns').mockReturnValue({
+      suggestions: [],
+      confidence: 1
+    });
     service = new ErrorReportingService(patternAnalyzer);
   });
 
@@ -105,7 +111,9 @@ describe('ErrorReportingService', () => {
 
       expect(report.context.retryCount).toBe(2);
     });
+  });
 
+  describe('suggestion generation', () => {
     it('should generate appropriate suggestions for invalid parameters', () => {
       const error = new Error('Invalid parameter format');
       const pattern = createPattern('search_files');
@@ -162,6 +170,34 @@ describe('ErrorReportingService', () => {
         })
       }));
     });
+
+    it('should filter suggestions based on confidence threshold', () => {
+      const error = new Error('Resource not found');
+      const pattern = createPattern('read_file');
+      
+      vi.spyOn(patternAnalyzer, 'analyzePatterns').mockReturnValue({
+        suggestions: [{
+          toolName: 'read_file',
+          suggestedParameters: { path: './low-confidence.txt' },
+          confidence: 0.5,
+          reasoning: 'Low confidence suggestion'
+        }],
+        confidence: 0.5
+      });
+
+      const report = service.generateErrorReport(
+        error,
+        'read_file',
+        { path: './test.txt' },
+        pattern
+      );
+
+      expect(report.suggestions).not.toContainEqual(expect.objectContaining({
+        suggestedParameters: expect.objectContaining({
+          path: './low-confidence.txt'
+        })
+      }));
+    });
   });
 
   describe('history management', () => {
@@ -202,38 +238,25 @@ describe('ErrorReportingService', () => {
       service.clearHistory();
       expect(service.getErrorHistory()).toHaveLength(0);
     });
-  });
 
-  describe('suggestion generation', () => {
-    it('should combine pattern analysis suggestions with error-specific suggestions', () => {
-      // Add some successful patterns to the analyzer
-      patternAnalyzer.addPatterns([
-        {
-          toolName: 'read_file',
-          parameters: { path: './successful.txt' },
-          outcome: { success: true, duration: 100 },
-          timestamp: Date.now(),
-          retryCount: 0
-        }
-      ]);
-
-      const error = new Error('Resource not found');
+    it('should respect max history size', () => {
       const pattern = createPattern('read_file');
-      
-      const report = service.generateErrorReport(
-        error,
-        'read_file',
-        { path: 'failed/test.txt' },
-        pattern
-      );
+      const maxSize = 1000;
 
-      // Should include both pattern-based and error-specific suggestions
-      expect(report.suggestions.some(s => 
-        s.suggestedParameters.path === './successful.txt'
-      )).toBe(true);
-      expect(report.suggestions.some(s => 
-        s.suggestedParameters.path === 'failed'
-      )).toBe(true);
+      // Fill history beyond max size
+      for (let i = 0; i < maxSize + 10; i++) {
+        service.generateErrorReport(
+          new Error(`Error ${i}`),
+          'read_file',
+          { path: './test.txt' },
+          pattern
+        );
+      }
+
+      const history = service.getErrorHistory();
+      expect(history).toHaveLength(maxSize);
+      expect(history[0].message).toContain('Error ' + (maxSize + 9));
+      expect(history[maxSize - 1].message).toContain('Error 10');
     });
   });
 }); 

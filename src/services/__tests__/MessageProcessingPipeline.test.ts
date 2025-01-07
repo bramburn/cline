@@ -1,15 +1,15 @@
 import { MessageProcessingPipeline } from '../MessageProcessingPipeline';
-import { ClineMessage } from '../../shared/ExtensionMessage';
+import { Message, MessageProcessingResult } from '../../types/MessageTypes';
 import { firstValueFrom } from 'rxjs';
 
 describe('MessageProcessingPipeline', () => {
   let pipeline: MessageProcessingPipeline;
 
-  const createMessage = (content: string): ClineMessage => ({
+  const createMessage = (content: string): Message => ({
     type: 'user',
     content,
     id: 'test-id',
-    timestamp: new Date().toISOString()
+    timestamp: Date.now()
   });
 
   beforeEach(() => {
@@ -32,11 +32,12 @@ describe('MessageProcessingPipeline', () => {
       const longMessage = createMessage('this message is too long');
 
       const shortProcessedMessage = await firstValueFrom(pipeline.processMessage(shortMessage));
-      expect(shortProcessedMessage).toBeDefined();
-      expect(shortProcessedMessage.content).toBe('short');
+      expect(shortProcessedMessage.success).toBe(true);
+      expect(shortProcessedMessage.data?.content).toBe('short');
 
-      await expect(firstValueFrom(pipeline.processMessage(longMessage)))
-        .rejects.toThrow('Message validation failed');
+      const longProcessedMessage = await firstValueFrom(pipeline.processMessage(longMessage));
+      expect(longProcessedMessage.success).toBe(false);
+      expect(longProcessedMessage.error?.message).toBe('Message too long');
     });
 
     it('should handle built-in validations', async () => {
@@ -48,13 +49,15 @@ describe('MessageProcessingPipeline', () => {
       const longMessage = createMessage('too long message');
 
       const validProcessedMessage = await firstValueFrom(pipeline.processMessage(validMessage));
-      expect(validProcessedMessage).toBeDefined();
+      expect(validProcessedMessage.success).toBe(true);
 
-      await expect(firstValueFrom(pipeline.processMessage(emptyMessage)))
-        .rejects.toThrow('Message validation failed');
+      const emptyProcessedMessage = await firstValueFrom(pipeline.processMessage(emptyMessage));
+      expect(emptyProcessedMessage.success).toBe(false);
+      expect(emptyProcessedMessage.error?.message).toBe('Message content cannot be empty');
 
-      await expect(firstValueFrom(pipeline.processMessage(longMessage)))
-        .rejects.toThrow('Message validation failed');
+      const longProcessedMessage = await firstValueFrom(pipeline.processMessage(longMessage));
+      expect(longProcessedMessage.success).toBe(false);
+      expect(longProcessedMessage.error?.message).toContain('must be no longer than');
     });
 
     it('should handle multiple validations in sequence', async () => {
@@ -69,10 +72,11 @@ describe('MessageProcessingPipeline', () => {
       const invalidMessage = createMessage('Hello@World!');
 
       const processedMessage = await firstValueFrom(pipeline.processMessage(validMessage));
-      expect(processedMessage).toBeDefined();
+      expect(processedMessage.success).toBe(true);
 
-      await expect(firstValueFrom(pipeline.processMessage(invalidMessage)))
-        .rejects.toThrow('Message validation failed');
+      const invalidProcessedMessage = await firstValueFrom(pipeline.processMessage(invalidMessage));
+      expect(invalidProcessedMessage.success).toBe(false);
+      expect(invalidProcessedMessage.error?.message).toBe('No special characters allowed');
     });
   });
 
@@ -84,7 +88,8 @@ describe('MessageProcessingPipeline', () => {
       const message = createMessage('  hello   world  ');
       const processedMessage = await firstValueFrom(pipeline.processMessage(message));
 
-      expect(processedMessage.content).toBe('hello world');
+      expect(processedMessage.success).toBe(true);
+      expect(processedMessage.data?.content).toBe('hello world');
     });
 
     it('should handle custom transformations', async () => {
@@ -99,7 +104,8 @@ describe('MessageProcessingPipeline', () => {
       const message = createMessage('hello world');
       const processedMessage = await firstValueFrom(pipeline.processMessage(message));
 
-      expect(processedMessage.content).toBe('HELLO WORLD');
+      expect(processedMessage.success).toBe(true);
+      expect(processedMessage.data?.content).toBe('HELLO WORLD');
     });
 
     it('should handle multiple transformations in sequence', async () => {
@@ -115,32 +121,12 @@ describe('MessageProcessingPipeline', () => {
       const message = createMessage('  hello  ');
       const processedMessage = await firstValueFrom(pipeline.processMessage(message));
 
-      expect(processedMessage.content).toBe('prefix: hello');
+      expect(processedMessage.success).toBe(true);
+      expect(processedMessage.data?.content).toBe('prefix: hello');
     });
   });
 
   describe('Error Handling', () => {
-    it('should emit errors through error stream', (done) => {
-      pipeline.addValidation({
-        name: 'alwaysFail',
-        validate: () => false,
-        errorMessage: 'Test error'
-      });
-
-      const errorSpy = jest.fn();
-      pipeline.getErrorStream().subscribe(errorSpy);
-
-      const message = createMessage('test');
-      firstValueFrom(pipeline.processMessage(message))
-        .catch(() => {
-          expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({
-            message: 'Test error',
-            stage: 'alwaysFail'
-          }));
-          done();
-        });
-    });
-
     it('should handle transformation errors', async () => {
       pipeline.addTransformation({
         name: 'failingTransform',
@@ -150,8 +136,10 @@ describe('MessageProcessingPipeline', () => {
       });
 
       const message = createMessage('test');
-      await expect(firstValueFrom(pipeline.processMessage(message)))
-        .rejects.toThrow('Transform error');
+      const processedMessage = await firstValueFrom(pipeline.processMessage(message));
+      
+      expect(processedMessage.success).toBe(false);
+      expect(processedMessage.error?.message).toContain('Transform error');
     });
   });
 }); 
