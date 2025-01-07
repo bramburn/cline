@@ -122,7 +122,7 @@ export class Cline {
 		historyItem?: HistoryItem,
 	) {
 		this.messageService = new MessageService();
-		this.conversationStateService = new ConversationStateService();
+		this.conversationStateService = new ConversationStateService(historyItem);
 		this.providerRef = new WeakRef(provider)
 		this.api = buildApiHandler(apiConfiguration)
 		this.terminalManager = new TerminalManager()
@@ -144,6 +144,16 @@ export class Cline {
 
 		// Initialize the conversation history service asynchronously
 		this.initializeConversationHistoryService(historyItem);
+
+		// Initialize ConversationStateService
+		this.conversationStateService = new ConversationStateService(historyItem);
+
+		// Optional: Subscribe to state changes if needed
+		this.conversationStateService.getState().subscribe(state => {
+			// You can add any global state change handling here if required
+			this.isStreaming = state.isProcessing;
+			this.abort = state.error ? true : this.abort;
+		});
 	}
 	// remove refactor
 	// Add this new private method
@@ -634,19 +644,12 @@ export class Cline {
 	// Task lifecycle
 
 	private async startTask(task?: string, images?: string[]): Promise<void> {
-		// conversationHistory (for API) and clineMessages (for webview) need to be in sync
-		// if the extension process were killed, then on restart the clineMessages might not be empty, so we need to set it to [] when we create a new Cline client (otherwise webview would show stale messages from previous session)
-		this.clineMessages = [];
-		this.apiConversationHistory = [];
-		
-		// Initialize conversation state
+		// Reset conversation state
 		this.conversationStateService.setState({
 			messages: [],
 			isProcessing: false
 		});
 		
-		await this.providerRef.deref()?.postStateToWebview();
-
 		await this.say("text", task, images);
 
 		this.isInitialized = true;
@@ -665,14 +668,14 @@ export class Cline {
 	}
 
 	private async resumeTaskFromHistory() {
+		// Initialize conversation state with history
 		// TODO: right now we let users init checkpoints for old tasks, assuming they're continuing them from the same workspace (which we never tied to tasks, so no way for us to know if it's opened in the right workspace)
 		// const doesShadowGitExist = await CheckpointTracker.doesShadowGitExist(this.taskId, this.providerRef.deref())
 		// if (!doesShadowGitExist) {
 		// 	this.checkpointTrackerErrorMessage = "Checkpoints are only available for new tasks"
 		// }
-
-		const modifiedClineMessages = await this.getSavedClineMessages()
-
+		const modifiedClineMessages = await this.getSavedClineMessages();
+		
 		// Remove any resume messages that may have been added before
 		const lastRelevantMessageIndex = findLastIndex(
 			modifiedClineMessages,
@@ -681,8 +684,6 @@ export class Cline {
 		if (lastRelevantMessageIndex !== -1) {
 			modifiedClineMessages.splice(lastRelevantMessageIndex + 1);
 		}
-
-		// Initialize conversation state with history
 		this.conversationStateService.setState({
 			messages: modifiedClineMessages.map(msg => ({
 				type: msg.type,
@@ -3100,7 +3101,6 @@ export class Cline {
 	}
 
 	async dispose() {
-		this.abort = true;
 		this.conversationStateService.setProcessing(false);
 		this.conversationStateService.clearAskResponse();
 		this.conversationStateService.dispose();
@@ -3118,5 +3118,15 @@ export class Cline {
 		if (this.checkpointTracker) {
 			await this.checkpointTracker.dispose();
 		}
+	}
+
+	// Optional: Add methods to interact with ConversationStateService
+
+	getCurrentConversationState() {
+		return this.conversationStateService.getCurrentState();
+	}
+
+	getConversationMessages() {
+		return this.conversationStateService.getMessages();
 	}
 }
