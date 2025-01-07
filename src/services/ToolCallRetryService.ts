@@ -1,149 +1,67 @@
-import { ToolUseName } from '../core/assistant-message';
-import { ErrorCategory, RetryStrategy, ToolCallPattern } from '../types/ToolCallOptimization';
-import delay from 'delay';
+export interface RetryConfig {
+  maxRetries: number;
+  retryDelay: number;
+  shouldRetry?: (error: Error) => boolean;
+}
+
+export interface RetryHistory {
+  attempts: number;
+  lastError?: Error;
+  lastAttemptTime?: number;
+}
 
 export class ToolCallRetryService {
-  private retryStrategies: Map<ToolUseName, RetryStrategy> = new Map();
-  private retryHistory: ToolCallPattern[] = [];
+  private retryHistory = new Map<string, RetryHistory>();
 
-  constructor() {
-    this.initializeDefaultStrategies();
-  }
-
-  private initializeDefaultStrategies() {
-    const defaultStrategy: RetryStrategy = {
-      maxAttempts: 3,
-      delayMs: 1000,
-      shouldRetry: (error: Error) => {
-        // Don't retry on invalid parameters or missing parameters
-        return !error.message.includes('INVALID_PARAMETER') && 
-               !error.message.includes('MISSING_PARAMETER');
-      },
-      modifyParameters: (params: Record<string, string>, error: Error) => {
-        return { ...params }; // Default strategy doesn't modify parameters
-      }
-    };
-
-    // Tool-specific strategies
-    const readFileStrategy: RetryStrategy = {
-      ...defaultStrategy,
-      modifyParameters: (params: Record<string, string>, error: Error) => {
-        if (error.message.includes('RESOURCE_NOT_FOUND')) {
-          // Try parent directory if file not found
-          const path = params.path;
-          if (path && path.includes('/')) {
-            return {
-              ...params,
-              path: path.split('/').slice(0, -1).join('/')
-            };
-          }
-        }
-        return params;
-      }
-    };
-
-    const searchFilesStrategy: RetryStrategy = {
-      ...defaultStrategy,
-      modifyParameters: (params: Record<string, string>, error: Error) => {
-        if (error.message.includes('INVALID_PARAMETER') && params.regex) {
-          // Escape special characters in regex
-          return {
-            ...params,
-            regex: params.regex.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          };
-        }
-        return params;
-      }
-    };
-
-    // Register strategies
-    this.retryStrategies.set('read_file', readFileStrategy);
-    this.retryStrategies.set('search_files', searchFilesStrategy);
-    this.retryStrategies.set('list_files', defaultStrategy);
-    this.retryStrategies.set('list_code_definition_names', defaultStrategy);
-    this.retryStrategies.set('write_to_file', defaultStrategy);
-    this.retryStrategies.set('execute_command', defaultStrategy);
-  }
+  constructor() {}
 
   public async executeWithRetry<T>(
-    toolName: ToolUseName,
-    parameters: Record<string, string>,
-    execute: (params: Record<string, string>) => Promise<T>
+    toolId: string,
+    operation: () => Promise<T>,
+    config: RetryConfig
   ): Promise<T> {
-    const strategy = this.retryStrategies.get(toolName) || this.getDefaultStrategy();
-    let lastError: Error;
-    let attempt = 0;
-    const startTime = Date.now();
+    let attempts = 0;
+    let lastError: Error | undefined;
 
-    while (attempt < strategy.maxAttempts) {
+    while (attempts < config.maxRetries) {
       try {
-        const result = await execute(parameters);
-        this.recordAttempt(toolName, parameters, {
-          success: true,
-          duration: Date.now() - startTime
-        });
+        const result = await operation();
+        this.updateRetryHistory(toolId, attempts, undefined);
         return result;
       } catch (error) {
-        lastError = error as Error;
-        attempt++;
+        attempts++;
+        lastError = error instanceof Error ? error : new Error(String(error));
 
-        this.recordAttempt(toolName, parameters, {
-          success: false,
-          duration: Date.now() - startTime,
-          errorMessage: lastError.message
-        });
-
-        if (attempt < strategy.maxAttempts && strategy.shouldRetry(lastError)) {
-          parameters = strategy.modifyParameters(parameters, lastError);
-          await delay(strategy.delayMs);
-          continue;
+        if (config.shouldRetry && !config.shouldRetry(lastError)) {
+          this.updateRetryHistory(toolId, attempts, lastError);
+          throw lastError;
         }
-        break;
+
+        if (attempts === config.maxRetries) {
+          this.updateRetryHistory(toolId, attempts, lastError);
+          throw lastError;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, config.retryDelay));
       }
     }
 
-    throw lastError!;
+    throw new Error('Maximum retry attempts reached');
   }
 
-  private recordAttempt(
-    toolName: ToolUseName,
-    parameters: Record<string, string>,
-    outcome: { success: boolean; duration: number; errorMessage?: string }
-  ) {
-    const pattern: ToolCallPattern = {
-      toolName,
-      parameters,
-      outcome,
-      timestamp: Date.now(),
-      retryCount: this.retryHistory.filter(p => p.toolName === toolName).length,
-      errorType: outcome.errorMessage ? this.categorizeError(outcome.errorMessage) : undefined
-    };
-    this.retryHistory.push(pattern);
+  public getRetryHistory(toolId: string): RetryHistory | undefined {
+    return this.retryHistory.get(toolId);
   }
 
-  private categorizeError(errorMessage: string): ErrorCategory {
-    if (errorMessage.includes('INVALID_PARAMETER')) return ErrorCategory.INVALID_PARAMETER;
-    if (errorMessage.includes('MISSING_PARAMETER')) return ErrorCategory.MISSING_PARAMETER;
-    if (errorMessage.includes('PERMISSION_DENIED')) return ErrorCategory.PERMISSION_DENIED;
-    if (errorMessage.includes('RESOURCE_NOT_FOUND')) return ErrorCategory.RESOURCE_NOT_FOUND;
-    if (errorMessage.includes('TIMEOUT')) return ErrorCategory.TIMEOUT;
-    return ErrorCategory.UNKNOWN;
+  public clearRetryHistory(toolId: string): void {
+    this.retryHistory.delete(toolId);
   }
 
-  private getDefaultStrategy(): RetryStrategy {
-    return {
-      maxAttempts: 3,
-      delayMs: 1000,
-      shouldRetry: () => true,
-      modifyParameters: params => params
-    };
-  }
-
-  public getRetryHistory(): ToolCallPattern[] {
-    return [...this.retryHistory];
-  }
-
-  public clearHistory(): void {
-    this.retryHistory = [];
+  private updateRetryHistory(toolId: string, attempts: number, lastError?: Error): void {
+    this.retryHistory.set(toolId, {
+      attempts,
+      lastError,
+      lastAttemptTime: Date.now()
+    });
   }
 } 

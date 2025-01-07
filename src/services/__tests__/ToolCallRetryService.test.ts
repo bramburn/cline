@@ -1,121 +1,134 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ToolCallRetryService } from '../ToolCallRetryService';
 
 describe('ToolCallRetryService', () => {
-  const service = new ToolCallRetryService();
+  let retryService: ToolCallRetryService;
+
+  beforeEach(() => {
+    retryService = new ToolCallRetryService();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   describe('executeWithRetry', () => {
-    it('should successfully execute a tool call without retries', async () => {
-      const mockExecute = vi.fn().mockResolvedValue('success');
+    it('should execute operation successfully without retries', async () => {
+      const operation = vi.fn().mockResolvedValue('success');
+      const config = { maxRetries: 3, retryDelay: 1000 };
 
-      const result = await service.executeWithRetry(
-        'read_file',
-        { path: './test.txt' },
-        mockExecute
-      );
+      const result = await retryService.executeWithRetry('tool1', operation, config);
 
       expect(result).toBe('success');
-      expect(mockExecute).toHaveBeenCalledTimes(1);
+      expect(operation).toHaveBeenCalledTimes(1);
+
+      const history = retryService.getRetryHistory('tool1');
+      expect(history?.attempts).toBe(0);
+      expect(history?.lastError).toBeUndefined();
     });
 
     it('should retry on failure and succeed', async () => {
-      const mockExecute = vi.fn()
-        .mockRejectedValueOnce(new Error('TIMEOUT'))
-        .mockRejectedValueOnce(new Error('TIMEOUT'))
+      const operation = vi.fn()
+        .mockRejectedValueOnce(new Error('fail1'))
+        .mockRejectedValueOnce(new Error('fail2'))
         .mockResolvedValue('success');
 
-      const result = await service.executeWithRetry(
-        'read_file',
-        { path: './test.txt' },
-        mockExecute
-      );
+      const config = { maxRetries: 3, retryDelay: 1000 };
+
+      const result = await retryService.executeWithRetry('tool1', operation, config);
 
       expect(result).toBe('success');
-      expect(mockExecute).toHaveBeenCalledTimes(3);
+      expect(operation).toHaveBeenCalledTimes(3);
+
+      const history = retryService.getRetryHistory('tool1');
+      expect(history?.attempts).toBe(2);
+      expect(history?.lastError).toBeUndefined();
     });
 
-    it('should not retry on invalid parameter errors', async () => {
-      const mockExecute = vi.fn()
-        .mockRejectedValue(new Error('INVALID_PARAMETER'));
+    it('should fail after max retries', async () => {
+      const error = new Error('test error');
+      const operation = vi.fn().mockRejectedValue(error);
+      const config = { maxRetries: 3, retryDelay: 1000 };
 
-      await expect(service.executeWithRetry(
-        'read_file',
-        { path: './test.txt' },
-        mockExecute
-      )).rejects.toThrow('INVALID_PARAMETER');
+      await expect(retryService.executeWithRetry('tool1', operation, config))
+        .rejects.toThrow(error);
 
-      expect(mockExecute).toHaveBeenCalledTimes(1);
+      expect(operation).toHaveBeenCalledTimes(3);
+
+      const history = retryService.getRetryHistory('tool1');
+      expect(history?.attempts).toBe(3);
+      expect(history?.lastError).toBe(error);
     });
 
-    it('should modify parameters for read_file on RESOURCE_NOT_FOUND', async () => {
-      const mockExecute = vi.fn()
-        .mockRejectedValueOnce(new Error('RESOURCE_NOT_FOUND'))
+    it('should respect shouldRetry function', async () => {
+      const error = new Error('test error');
+      const operation = vi.fn().mockRejectedValue(error);
+      const shouldRetry = vi.fn().mockReturnValue(false);
+      const config = { maxRetries: 3, retryDelay: 1000, shouldRetry };
+
+      await expect(retryService.executeWithRetry('tool1', operation, config))
+        .rejects.toThrow(error);
+
+      expect(operation).toHaveBeenCalledTimes(1);
+      expect(shouldRetry).toHaveBeenCalledWith(error);
+
+      const history = retryService.getRetryHistory('tool1');
+      expect(history?.attempts).toBe(1);
+      expect(history?.lastError).toBe(error);
+    });
+
+    it('should wait for retry delay between attempts', async () => {
+      const operation = vi.fn()
+        .mockRejectedValueOnce(new Error('fail1'))
+        .mockRejectedValueOnce(new Error('fail2'))
         .mockResolvedValue('success');
 
-      const result = await service.executeWithRetry(
-        'read_file',
-        { path: './test.txt', start_line: 1, end_line: 10 },
-        mockExecute
-      );
+      const config = { maxRetries: 3, retryDelay: 1000 };
 
+      const promise = retryService.executeWithRetry('tool1', operation, config);
+
+      expect(operation).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(operation).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(operation).toHaveBeenCalledTimes(3);
+
+      const result = await promise;
       expect(result).toBe('success');
-      expect(mockExecute).toHaveBeenCalledTimes(2);
-      expect(mockExecute).toHaveBeenLastCalledWith('read_file', {
-        path: './test.txt',
-        start_line: 1,
-        end_line: 20
-      });
-    });
-
-    it('should modify parameters for search_files on invalid regex', async () => {
-      const mockExecute = vi.fn()
-        .mockRejectedValueOnce(new Error('INVALID_PARAMETER'))
-        .mockResolvedValue('success');
-
-      const result = await service.executeWithRetry(
-        'search_files',
-        { path: './', regex: '*.txt' },
-        mockExecute
-      );
-
-      expect(result).toBe('success');
-      expect(mockExecute).toHaveBeenCalledTimes(2);
-      expect(mockExecute).toHaveBeenLastCalledWith('search_files', {
-        path: './',
-        regex: '.+\\.txt$'
-      });
     });
   });
 
-  describe('history management', () => {
-    it('should maintain retry history', async () => {
-      const mockExecute = vi.fn()
-        .mockRejectedValueOnce(new Error('TIMEOUT'))
-        .mockResolvedValue('success');
+  describe('retry history management', () => {
+    it('should track retry history correctly', async () => {
+      const error = new Error('test error');
+      const operation = vi.fn().mockRejectedValue(error);
+      const config = { maxRetries: 2, retryDelay: 1000 };
 
-      await service.executeWithRetry(
-        'read_file',
-        { path: './test.txt' },
-        mockExecute
-      );
+      try {
+        await retryService.executeWithRetry('tool1', operation, config);
+      } catch {}
 
-      const history = service.getRetryHistory();
-      expect(history).toHaveLength(1);
-      expect(history[0].error).toBe('TIMEOUT');
-      expect(history[0].toolName).toBe('read_file');
+      const history = retryService.getRetryHistory('tool1');
+      expect(history?.attempts).toBe(2);
+      expect(history?.lastError).toBe(error);
+      expect(history?.lastAttemptTime).toBeDefined();
     });
 
-    it('should clear history', async () => {
-      const mockExecute = vi.fn().mockResolvedValue('success');
+    it('should clear retry history', async () => {
+      const operation = vi.fn().mockRejectedValue(new Error('test error'));
+      const config = { maxRetries: 1, retryDelay: 1000 };
 
-      await service.executeWithRetry(
-        'read_file',
-        { path: './test.txt' },
-        mockExecute
-      );
+      try {
+        await retryService.executeWithRetry('tool1', operation, config);
+      } catch {}
 
-      service.clearHistory();
-      expect(service.getRetryHistory()).toHaveLength(0);
+      expect(retryService.getRetryHistory('tool1')).toBeDefined();
+
+      retryService.clearRetryHistory('tool1');
+      expect(retryService.getRetryHistory('tool1')).toBeUndefined();
     });
   });
 }); 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ClineStateService } from '../ClineStateService';
+import { firstValueFrom } from 'rxjs';
 
 describe('ClineStateService', () => {
   let stateService: ClineStateService;
@@ -9,9 +10,11 @@ describe('ClineStateService', () => {
   });
 
   describe('abort state management', () => {
-    it('should update abort state', () => {
+    it('should update abort state', async () => {
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.updateAbort(true);
-      expect(stateService.getCurrentState().abort).toBe(true);
+      const state = await statePromise;
+      expect(state.abort).toBe(true);
     });
 
     it('should throw error for invalid abort state', () => {
@@ -20,9 +23,11 @@ describe('ClineStateService', () => {
   });
 
   describe('streaming state management', () => {
-    it('should update streaming state', () => {
+    it('should update streaming state', async () => {
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.updateIsStreaming(true);
-      expect(stateService.getCurrentState().isStreaming).toBe(true);
+      const state = await statePromise;
+      expect(state.isStreaming).toBe(true);
     });
 
     it('should throw error for invalid streaming state', () => {
@@ -31,10 +36,12 @@ describe('ClineStateService', () => {
   });
 
   describe('user message content management', () => {
-    it('should set user message content', () => {
+    it('should set user message content', async () => {
       const content = [{ type: 'text', text: 'test' }];
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.setUserMessageContent(content);
-      expect(stateService.getCurrentState().userMessageContent).toEqual(content);
+      const state = await statePromise;
+      expect(state.userMessageContent).toEqual(content);
     });
 
     it('should throw error for invalid user message content', () => {
@@ -47,9 +54,11 @@ describe('ClineStateService', () => {
   });
 
   describe('user message content ready management', () => {
-    it('should update user message content ready state', () => {
+    it('should update user message content ready state', async () => {
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.updateUserMessageContentReady(true);
-      expect(stateService.getCurrentState().userMessageContentReady).toBe(true);
+      const state = await statePromise;
+      expect(state.userMessageContentReady).toBe(true);
     });
 
     it('should throw error for invalid ready state', () => {
@@ -58,10 +67,12 @@ describe('ClineStateService', () => {
   });
 
   describe('assistant message content management', () => {
-    it('should set assistant message content', () => {
+    it('should set assistant message content', async () => {
       const content = [{ type: 'text', text: 'test' }];
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.setAssistantMessageContent(content);
-      expect(stateService.getCurrentState().assistantMessageContent).toEqual(content);
+      const state = await statePromise;
+      expect(state.assistantMessageContent).toEqual(content);
     });
 
     it('should throw error for invalid assistant message content', () => {
@@ -70,25 +81,28 @@ describe('ClineStateService', () => {
   });
 
   describe('consecutive auto approved requests management', () => {
-    it('should increment consecutive auto approved requests', () => {
+    it('should increment consecutive auto approved requests', async () => {
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.incrementConsecutiveAutoApprovedRequests();
-      expect(stateService.getCurrentState().consecutiveAutoApprovedRequests).toBe(1);
+      const state = await statePromise;
+      expect(state.consecutiveAutoApprovedRequests).toBe(1);
     });
 
-    it('should reset consecutive auto approved requests', () => {
+    it('should reset consecutive auto approved requests', async () => {
       stateService.incrementConsecutiveAutoApprovedRequests();
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.resetConsecutiveAutoApprovedRequests();
-      expect(stateService.getCurrentState().consecutiveAutoApprovedRequests).toBe(0);
+      const state = await statePromise;
+      expect(state.consecutiveAutoApprovedRequests).toBe(0);
     });
   });
 
   describe('state updates', () => {
-    it('should emit state updates', (done) => {
-      stateService.getStateUpdates().subscribe((state) => {
-        expect(state.abort).toBe(true);
-        done();
-      });
+    it('should emit state updates', async () => {
+      const statePromise = firstValueFrom(stateService.getStateUpdates());
       stateService.updateAbort(true);
+      const state = await statePromise;
+      expect(state.abort).toBe(true);
     });
   });
 });

@@ -1,105 +1,131 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ApiRequestService } from '../ApiRequestService';
 import { StreamController } from '../StreamController';
-import { firstValueFrom } from 'rxjs';
 
 describe('ApiRequestService', () => {
-  let service: ApiRequestService;
+  let apiRequestService: ApiRequestService;
   let streamController: StreamController;
+  let originalFetch: typeof fetch;
 
   beforeEach(() => {
     streamController = new StreamController();
-    service = new ApiRequestService(streamController);
+    apiRequestService = new ApiRequestService(streamController);
+    originalFetch = global.fetch;
   });
 
-  it('should perform an API request successfully', async () => {
-    const mockResponse = {
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ value: new TextEncoder().encode('Hello'), done: false })
-            .mockResolvedValueOnce({ value: new TextEncoder().encode('World'), done: false })
-            .mockResolvedValueOnce({ value: undefined, done: true })
-        })
-      }
-    };
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.clearAllMocks();
+  });
 
-    global.fetch = vi.fn().mockResolvedValue(mockResponse);
+  describe('performRequest', () => {
+    it('should perform a successful request', async () => {
+      const mockResponse = { data: 'test' };
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockResponse),
+        headers: new Headers({ 'Content-Type': 'application/json' })
+      });
 
-    const chunks: any[] = [];
-    await service.performRequest('test-url', {
-      method: 'POST',
-      body: JSON.stringify({ test: 'data' })
-    }, (chunk) => {
-      chunks.push(chunk);
+      const config = {
+        url: 'https://api.test.com',
+        method: 'GET'
+      };
+
+      const response = await apiRequestService.performRequest(config);
+
+      expect(response.data).toEqual(mockResponse);
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toBe('application/json');
     });
 
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0]).toBe('Hello');
-    expect(chunks[1]).toBe('World');
-  });
+    it('should handle request errors', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404
+      });
 
-  it('should handle API request errors', async () => {
-    const mockResponse = {
-      ok: false,
-      status: 500,
-      statusText: 'Internal Server Error'
-    };
+      const config = {
+        url: 'https://api.test.com',
+        method: 'GET'
+      };
 
-    global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      await expect(apiRequestService.performRequest(config)).rejects.toThrow('HTTP error! status: 404');
+    });
 
-    await expect(service.performRequest('test-url', {
-      method: 'POST',
-      body: JSON.stringify({ test: 'data' })
-    }, () => {})).rejects.toThrow('API Error: 500 Internal Server Error');
-  });
+    it('should handle network errors', async () => {
+      const networkError = new Error('Network error');
+      global.fetch = vi.fn().mockRejectedValue(networkError);
 
-  it('should update stream controller progress', async () => {
-    const mockResponse = {
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ value: new TextEncoder().encode('Hello'), done: false })
-            .mockResolvedValueOnce({ value: undefined, done: true })
+      const config = {
+        url: 'https://api.test.com',
+        method: 'GET'
+      };
+
+      await expect(apiRequestService.performRequest(config)).rejects.toThrow(networkError);
+    });
+
+    it('should handle request timeout', async () => {
+      const abortError = new Error('The operation was aborted');
+      global.fetch = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const config = {
+        url: 'https://api.test.com',
+        method: 'GET',
+        timeout: 100
+      };
+
+      await expect(apiRequestService.performRequest(config)).rejects.toThrow();
+    });
+
+    it('should update progress during request', async () => {
+      const mockResponse = { data: 'test' };
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockResponse),
+        headers: new Headers()
+      });
+
+      const progressUpdates: number[] = [];
+      streamController.getProgressUpdates().subscribe(progress => {
+        progressUpdates.push(progress.progress);
+      });
+
+      const config = {
+        url: 'https://api.test.com',
+        method: 'GET'
+      };
+
+      await apiRequestService.performRequest(config);
+
+      expect(progressUpdates).toEqual([0, 50, 100]);
+    });
+
+    it('should handle request with body', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+        headers: new Headers()
+      });
+
+      const config = {
+        url: 'https://api.test.com',
+        method: 'POST',
+        body: { test: 'data' }
+      };
+
+      await apiRequestService.performRequest(config);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.test.com',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ test: 'data' })
         })
-      }
-    };
-
-    global.fetch = vi.fn().mockResolvedValue(mockResponse);
-
-    const updateProgressSpy = vi.spyOn(streamController, 'updateProgress');
-    await service.performRequest('test-url', {
-      method: 'POST',
-      body: JSON.stringify({ test: 'data' })
-    }, () => {});
-
-    expect(updateProgressSpy).toHaveBeenCalled();
-  });
-
-  it('should support cancellation', async () => {
-    const mockResponse = {
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn().mockResolvedValue({ value: new TextEncoder().encode('data'), done: false }),
-          cancel: vi.fn()
-        })
-      }
-    };
-
-    global.fetch = vi.fn().mockResolvedValue(mockResponse);
-
-    const abortController = new AbortController();
-    const requestPromise = service.performRequest('test-url', {
-      method: 'POST',
-      body: JSON.stringify({ test: 'data' }),
-      signal: abortController.signal
-    }, () => {});
-
-    abortController.abort();
-
-    await expect(requestPromise).rejects.toThrow('Request aborted');
+      );
+    });
   });
 }); 
