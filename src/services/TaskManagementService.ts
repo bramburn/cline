@@ -1,6 +1,5 @@
-import { Observable, Subject } from 'rxjs';
-import { TaskMetricsService } from './TaskMetricsService';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
+import { Subject } from 'rxjs';
 
 export interface TaskState {
   id: string;
@@ -19,40 +18,41 @@ export interface TaskMetrics {
 }
 
 export class TaskManagementService {
-  private currentTask?: TaskState;
-  private taskHistory: Map<string, TaskState> = new Map();
-  private metricsService: TaskMetricsService;
+  private currentTask: TaskState | null = null;
+  private taskHistory = new Map<string, TaskState>();
   private taskStateSubject = new Subject<TaskState>();
 
-  constructor(metricsService: TaskMetricsService) {
-    this.metricsService = metricsService;
-  }
+  constructor() {}
 
-  async startTask(): Promise<TaskState> {
-    // End current task if exists
+  public startTask(): string {
+    // End current task if it exists
     if (this.currentTask) {
-      await this.endTask(this.currentTask.id);
+      this.endTask(this.currentTask.id);
     }
 
+    const taskId = randomUUID();
     const newTask: TaskState = {
-      id: uuidv4(),
+      id: taskId,
       status: 'active',
       startTime: Date.now(),
       metrics: {
         tokenCount: 0,
         cost: 0,
-        duration: 0
+        duration: 0,
       }
     };
 
     this.currentTask = newTask;
-    this.taskHistory.set(newTask.id, newTask);
+    this.taskHistory.set(taskId, newTask);
     this.taskStateSubject.next(newTask);
-
-    return newTask;
+    return taskId;
   }
 
-  async pauseTask(taskId: string): Promise<void> {
+  public getCurrentTask(): TaskState | null {
+    return this.currentTask;
+  }
+
+  public pauseTask(taskId: string): void {
     const task = this.taskHistory.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -62,18 +62,17 @@ export class TaskManagementService {
     this.taskStateSubject.next(task);
   }
 
-  async resumeTask(taskId: string): Promise<void> {
+  public resumeTask(taskId: string): void {
     const task = this.taskHistory.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
 
     task.status = 'active';
-    this.currentTask = task;
     this.taskStateSubject.next(task);
   }
 
-  async endTask(taskId: string): Promise<void> {
+  public endTask(taskId: string): void {
     const task = this.taskHistory.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -84,13 +83,13 @@ export class TaskManagementService {
     task.metrics.duration = task.endTime - task.startTime;
     
     if (this.currentTask?.id === taskId) {
-      this.currentTask = undefined;
+      this.currentTask = null;
     }
-
+    
     this.taskStateSubject.next(task);
   }
 
-  async failTask(taskId: string, error: Error): Promise<void> {
+  public failTask(taskId: string): void {
     const task = this.taskHistory.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -99,31 +98,23 @@ export class TaskManagementService {
     task.status = 'failed';
     task.endTime = Date.now();
     task.metrics.duration = task.endTime - task.startTime;
-
+    
     if (this.currentTask?.id === taskId) {
-      this.currentTask = undefined;
+      this.currentTask = null;
     }
-
+    
     this.taskStateSubject.next(task);
   }
 
-  getCurrentTask(): TaskState | undefined {
-    return this.currentTask;
-  }
-
-  getTask(taskId: string): TaskState | undefined {
+  public getTaskState(taskId: string): TaskState | undefined {
     return this.taskHistory.get(taskId);
   }
 
-  getAllTasks(): TaskState[] {
-    return Array.from(this.taskHistory.values());
-  }
-
-  getTaskStateObservable(): Observable<TaskState> {
+  public getTaskStateUpdates() {
     return this.taskStateSubject.asObservable();
   }
 
-  updateTaskMetrics(taskId: string, metrics: Partial<TaskMetrics>): void {
+  public updateTaskMetrics(taskId: string, metrics: Partial<TaskMetrics>): void {
     const task = this.taskHistory.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -131,9 +122,10 @@ export class TaskManagementService {
 
     task.metrics = {
       ...task.metrics,
-      ...metrics
+      ...metrics,
+      duration: task.endTime ? task.endTime - task.startTime : Date.now() - task.startTime
     };
-
+    
     this.taskStateSubject.next(task);
   }
 } 

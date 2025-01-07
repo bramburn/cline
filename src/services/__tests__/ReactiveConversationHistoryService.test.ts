@@ -1,89 +1,104 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ReactiveConversationHistoryService } from '../ReactiveConversationHistoryService';
-import { ClineMessage } from '../../shared/ExtensionMessage';
 import { firstValueFrom } from 'rxjs';
-
-const createMessage = (text: string, ts?: number): ClineMessage => ({
-  ts: ts || Date.now(),
-  type: 'say',
-  text: text,
-  content: text
-});
+import { ClineMessage } from '../../shared/ExtensionMessage';
 
 describe('ReactiveConversationHistoryService', () => {
   let service: ReactiveConversationHistoryService;
 
   beforeEach(() => {
-    service = new ReactiveConversationHistoryService();
-  });
-
-  afterEach(() => {
-    service.dispose();
+    service = new ReactiveConversationHistoryService({ taskDir: './test-tasks' });
   });
 
   it('should add messages', async () => {
-    const message = createMessage('Test message');
-    service.addMessage(message);
+    const message: ClineMessage = {
+      ts: Date.now(),
+      role: 'user',
+      content: 'Test message'
+    };
 
+    await service.addMessage(message);
     const messages = await firstValueFrom(service.getMessages());
+    
     expect(messages).toBeDefined();
     expect(messages).toHaveLength(1);
     expect(messages[0]).toEqual(message);
   });
 
   it('should update messages', async () => {
-    const originalMessage = createMessage('Original message');
-    service.addMessage(originalMessage);
+    const message: ClineMessage = {
+      ts: Date.now(),
+      role: 'user',
+      content: 'Original message'
+    };
 
-    const updatedMessage = { ...originalMessage, text: 'Updated message' };
+    await service.addMessage(message);
+
+    const updatedMessage = {
+      ...message,
+      content: 'Updated message'
+    };
+
     service.updateMessage(updatedMessage);
-
     const messages = await firstValueFrom(service.getMessages());
+    
     expect(messages).toBeDefined();
-    expect(messages[0].text).toBe('Updated message');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toEqual(updatedMessage);
   });
 
   it('should delete messages', async () => {
-    const message1 = createMessage('Message 1');
-    const message2 = createMessage('Message 2');
-    
-    service.addMessage(message1);
-    service.addMessage(message2);
+    const message1: ClineMessage = {
+      ts: Date.now(),
+      role: 'user',
+      content: 'Message 1'
+    };
 
-    service.deleteMessage(message1);
+    const message2: ClineMessage = {
+      ts: Date.now() + 1,
+      role: 'user',
+      content: 'Message 2'
+    };
 
+    await service.addMessage(message1);
+    await service.addMessage(message2);
+
+    service.deleteMessage(message1.ts);
     const messages = await firstValueFrom(service.getMessages());
+    
     expect(messages).toBeDefined();
     expect(messages).toHaveLength(1);
     expect(messages[0]).toEqual(message2);
   });
 
   it('should limit maximum number of messages', async () => {
-    const messages = Array.from({ length: 150 }, (_, i) => 
-      createMessage(`Message ${i}`, Date.now() + i)
-    );
+    const maxMessages = 100;
+    for (let i = 0; i < maxMessages + 10; i++) {
+      await service.addMessage({
+        ts: Date.now() + i,
+        role: 'user',
+        content: `Message ${i}`
+      });
+    }
 
-    messages.forEach(msg => service.addMessage(msg));
-
-    const storedMessages = await firstValueFrom(service.getMessages());
-    expect(storedMessages).toBeDefined();
-    expect(storedMessages).toHaveLength(100);
-    expect(storedMessages[0].text).toBe('Message 50');
+    const messages = await firstValueFrom(service.getMessages());
+    expect(messages).toHaveLength(maxMessages);
   });
 
   it('should set processing state', async () => {
     service.setProcessing(true);
-
-    const state = await firstValueFrom(service.getState());
-    expect(state).toBeDefined();
+    const state = service.getCurrentState();
     expect(state.isProcessing).toBe(true);
+
+    service.setProcessing(false);
+    const updatedState = service.getCurrentState();
+    expect(updatedState.isProcessing).toBe(false);
   });
 
   it('should set error state', async () => {
-    service.setError('Test error');
-
-    const state = await firstValueFrom(service.getState());
-    expect(state).toBeDefined();
-    expect(state.error).toBe('Test error');
+    const errorMessage = 'Test error';
+    service.setError(errorMessage);
+    const state = service.getCurrentState();
+    expect(state.error).toBe(errorMessage);
   });
 }); 

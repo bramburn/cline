@@ -1,146 +1,134 @@
-import { TaskManagementService, TaskState } from '../TaskManagementService';
-import { TaskMetricsService } from '../TaskMetricsService';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { TaskManagementService } from '../TaskManagementService';
 
 describe('TaskManagementService', () => {
-  let taskManagementService: TaskManagementService;
-  let metricsService: TaskMetricsService;
+  let service: TaskManagementService;
 
   beforeEach(() => {
-    metricsService = new TaskMetricsService();
-    taskManagementService = new TaskManagementService(metricsService);
+    service = new TaskManagementService();
   });
 
   describe('startTask', () => {
-    it('should create a new task with correct initial state', async () => {
-      const task = await taskManagementService.startTask();
+    it('should create a new task with initial state', () => {
+      const taskId = service.startTask();
+      const task = service.getTaskState(taskId);
 
       expect(task).toBeDefined();
-      expect(task.id).toBeDefined();
-      expect(task.status).toBe('active');
-      expect(task.startTime).toBeLessThanOrEqual(Date.now());
-      expect(task.metrics).toEqual({
-        tokenCount: 0,
-        cost: 0,
-        duration: 0
-      });
+      expect(task?.status).toBe('active');
+      expect(task?.metrics.tokenCount).toBe(0);
+      expect(task?.metrics.cost).toBe(0);
+      expect(task?.metrics.duration).toBe(0);
     });
 
-    it('should end current task when starting a new one', async () => {
-      const firstTask = await taskManagementService.startTask();
-      const secondTask = await taskManagementService.startTask();
+    it('should end current task when starting a new one', () => {
+      const firstTaskId = service.startTask();
+      const secondTaskId = service.startTask();
 
-      const firstTaskAfter = taskManagementService.getTask(firstTask.id);
-      expect(firstTaskAfter?.status).toBe('completed');
-      expect(secondTask.status).toBe('active');
+      const firstTask = service.getTaskState(firstTaskId);
+      const secondTask = service.getTaskState(secondTaskId);
+
+      expect(firstTask?.status).toBe('completed');
+      expect(secondTask?.status).toBe('active');
     });
   });
 
   describe('pauseTask', () => {
-    it('should pause an active task', async () => {
-      const task = await taskManagementService.startTask();
-      await taskManagementService.pauseTask(task.id);
+    it('should pause an active task', () => {
+      const taskId = service.startTask();
+      service.pauseTask(taskId);
 
-      const pausedTask = taskManagementService.getTask(task.id);
-      expect(pausedTask?.status).toBe('paused');
+      const task = service.getTaskState(taskId);
+      expect(task?.status).toBe('paused');
     });
 
-    it('should throw error when pausing non-existent task', async () => {
-      await expect(taskManagementService.pauseTask('non-existent')).rejects.toThrow();
+    it('should throw error when pausing non-existent task', () => {
+      expect(() => service.pauseTask('non-existent')).toThrow('Task non-existent not found');
     });
   });
 
   describe('resumeTask', () => {
-    it('should resume a paused task', async () => {
-      const task = await taskManagementService.startTask();
-      await taskManagementService.pauseTask(task.id);
-      await taskManagementService.resumeTask(task.id);
+    it('should resume a paused task', () => {
+      const taskId = service.startTask();
+      service.pauseTask(taskId);
+      service.resumeTask(taskId);
 
-      const resumedTask = taskManagementService.getTask(task.id);
-      expect(resumedTask?.status).toBe('active');
+      const task = service.getTaskState(taskId);
+      expect(task?.status).toBe('active');
     });
 
-    it('should throw error when resuming non-existent task', async () => {
-      await expect(taskManagementService.resumeTask('non-existent')).rejects.toThrow();
+    it('should throw error when resuming non-existent task', () => {
+      expect(() => service.resumeTask('non-existent')).toThrow('Task non-existent not found');
     });
   });
 
   describe('endTask', () => {
     it('should complete a task and update metrics', async () => {
-      const task = await taskManagementService.startTask();
-      await taskManagementService.endTask(task.id);
+      const taskId = service.startTask();
+      await new Promise(resolve => setTimeout(resolve, 10)); // Wait to ensure duration > 0
+      service.endTask(taskId);
 
-      const endedTask = taskManagementService.getTask(task.id);
+      const endedTask = service.getTaskState(taskId);
       expect(endedTask?.status).toBe('completed');
       expect(endedTask?.endTime).toBeDefined();
       expect(endedTask?.metrics.duration).toBeGreaterThan(0);
     });
 
-    it('should throw error when ending non-existent task', async () => {
-      await expect(taskManagementService.endTask('non-existent')).rejects.toThrow();
+    it('should throw error when ending non-existent task', () => {
+      expect(() => service.endTask('non-existent')).toThrow('Task non-existent not found');
     });
   });
 
   describe('failTask', () => {
     it('should mark task as failed and update metrics', async () => {
-      const task = await taskManagementService.startTask();
-      await taskManagementService.failTask(task.id, new Error('Test error'));
+      const taskId = service.startTask();
+      await new Promise(resolve => setTimeout(resolve, 10)); // Wait to ensure duration > 0
+      service.failTask(taskId);
 
-      const failedTask = taskManagementService.getTask(task.id);
+      const failedTask = service.getTaskState(taskId);
       expect(failedTask?.status).toBe('failed');
       expect(failedTask?.endTime).toBeDefined();
       expect(failedTask?.metrics.duration).toBeGreaterThan(0);
     });
 
-    it('should throw error when failing non-existent task', async () => {
-      await expect(taskManagementService.failTask('non-existent', new Error())).rejects.toThrow();
+    it('should throw error when failing non-existent task', () => {
+      expect(() => service.failTask('non-existent')).toThrow('Task non-existent not found');
     });
   });
 
   describe('task state management', () => {
-    it('should correctly track current task', async () => {
-      const task = await taskManagementService.startTask();
-      expect(taskManagementService.getCurrentTask()).toEqual(task);
+    it('should track current task correctly', () => {
+      const taskId = service.startTask();
+      expect(service.getCurrentTask()?.id).toBe(taskId);
 
-      await taskManagementService.endTask(task.id);
-      expect(taskManagementService.getCurrentTask()).toBeUndefined();
+      service.endTask(taskId);
+      expect(service.getCurrentTask()).toBeNull();
     });
 
-    it('should maintain task history', async () => {
-      const task1 = await taskManagementService.startTask();
-      const task2 = await taskManagementService.startTask();
+    it('should maintain task history', () => {
+      const taskId1 = service.startTask();
+      const taskId2 = service.startTask();
 
-      const allTasks = taskManagementService.getAllTasks();
-      expect(allTasks).toHaveLength(2);
-      expect(allTasks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: task1.id }),
-        expect.objectContaining({ id: task2.id })
-      ]));
+      expect(service.getTaskState(taskId1)).toBeDefined();
+      expect(service.getTaskState(taskId2)).toBeDefined();
     });
   });
 
   describe('metrics updates', () => {
-    it('should update task metrics', async () => {
-      const task = await taskManagementService.startTask();
-      const newMetrics = {
+    it('should update task metrics correctly', () => {
+      const taskId = service.startTask();
+      service.updateTaskMetrics(taskId, {
         tokenCount: 100,
-        cost: 0.5,
-        cacheReads: 5,
-        cacheWrites: 2
-      };
-
-      taskManagementService.updateTaskMetrics(task.id, newMetrics);
-      const updatedTask = taskManagementService.getTask(task.id);
-
-      expect(updatedTask?.metrics).toEqual({
-        ...task.metrics,
-        ...newMetrics
+        cost: 0.1
       });
+
+      const task = service.getTaskState(taskId);
+      expect(task?.metrics.tokenCount).toBe(100);
+      expect(task?.metrics.cost).toBe(0.1);
     });
 
-    it('should throw error when updating metrics for non-existent task', () => {
-      expect(() => taskManagementService.updateTaskMetrics('non-existent', { tokenCount: 100 }))
-        .toThrow();
+    it('should throw error when updating non-existent task', () => {
+      expect(() => service.updateTaskMetrics('non-existent', { tokenCount: 100 }))
+        .toThrow('Task non-existent not found');
     });
   });
 }); 

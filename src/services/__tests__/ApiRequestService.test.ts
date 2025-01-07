@@ -1,107 +1,105 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiRequestService } from '../ApiRequestService';
 import { StreamController } from '../StreamController';
-import { firstValueFrom, of } from 'rxjs';
-import { ApiStreamChunk } from '../../api/transform/stream';
+import { firstValueFrom } from 'rxjs';
 
 describe('ApiRequestService', () => {
-  let apiRequestService: ApiRequestService;
+  let service: ApiRequestService;
   let streamController: StreamController;
 
   beforeEach(() => {
     streamController = new StreamController();
-    apiRequestService = new ApiRequestService(streamController);
-  });
-
-  afterEach(() => {
-    streamController.dispose();
+    service = new ApiRequestService(streamController);
   });
 
   it('should perform an API request successfully', async () => {
-    const mockApi = {
-      createMessage: async function* () {
-        yield { type: 'text', text: 'Hello' };
-        yield { type: 'text', text: 'World' };
-        yield { type: 'usage', inputTokens: 10, outputTokens: 5 };
+    const mockResponse = {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({ value: new TextEncoder().encode('Hello'), done: false })
+            .mockResolvedValueOnce({ value: new TextEncoder().encode('World'), done: false })
+            .mockResolvedValueOnce({ value: undefined, done: true })
+        })
       }
     };
 
-    const options = {
-      systemPrompt: 'Test prompt',
-      conversationHistory: [],
-      previousApiReqIndex: 0
-    };
+    global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-    const chunks: ApiStreamChunk[] = [];
-    for await (const chunk of apiRequestService.performApiRequest(mockApi, options)) {
+    const chunks: any[] = [];
+    await service.performRequest('test-url', {
+      method: 'POST',
+      body: JSON.stringify({ test: 'data' })
+    }, (chunk) => {
       chunks.push(chunk);
-    }
+    });
 
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toEqual({ type: 'text', text: 'Hello' });
-    expect(chunks[1]).toEqual({ type: 'text', text: 'World' });
-    expect(chunks[2]).toEqual({ type: 'usage', inputTokens: 10, outputTokens: 5 });
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe('Hello');
+    expect(chunks[1]).toBe('World');
   });
 
   it('should handle API request errors', async () => {
-    const mockApi = {
-      createMessage: async function* () {
-        throw new Error('API Error');
-      }
+    const mockResponse = {
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error'
     };
 
-    const options = {
-      systemPrompt: 'Test prompt',
-      conversationHistory: [],
-      previousApiReqIndex: 0
-    };
+    global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-    await expect(
-      firstValueFrom(apiRequestService.performApiRequest(mockApi, options))
-    ).rejects.toThrow('API Error');
+    await expect(service.performRequest('test-url', {
+      method: 'POST',
+      body: JSON.stringify({ test: 'data' })
+    }, () => {})).rejects.toThrow('API Error: 500 Internal Server Error');
   });
 
   it('should update stream controller progress', async () => {
-    const mockApi = {
-      createMessage: async function* () {
-        yield { type: 'text', text: 'Hello' };
-        yield { type: 'text', text: 'World' };
+    const mockResponse = {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({ value: new TextEncoder().encode('Hello'), done: false })
+            .mockResolvedValueOnce({ value: undefined, done: true })
+        })
       }
     };
 
-    const options = {
-      systemPrompt: 'Test prompt',
-      conversationHistory: [],
-      previousApiReqIndex: 0
-    };
+    global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-    await firstValueFrom(apiRequestService.performApiRequest(mockApi, options));
+    const updateProgressSpy = vi.spyOn(streamController, 'updateProgress');
+    await service.performRequest('test-url', {
+      method: 'POST',
+      body: JSON.stringify({ test: 'data' })
+    }, () => {});
 
-    const progress = streamController.getCurrentProgress();
-    expect(progress.status).toBe('completed');
-    expect(progress.processed).toBe(2);
+    expect(updateProgressSpy).toHaveBeenCalled();
   });
 
   it('should support cancellation', async () => {
-    const mockApi = {
-      createMessage: async function* () {
-        yield { type: 'text', text: 'Hello' };
-        yield { type: 'text', text: 'World' };
+    const mockResponse = {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockResolvedValue({ value: new TextEncoder().encode('data'), done: false }),
+          cancel: vi.fn()
+        })
       }
     };
 
-    const options = {
-      systemPrompt: 'Test prompt',
-      conversationHistory: [],
-      previousApiReqIndex: 0,
-      abort$: of(true)
-    };
+    global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-    const chunks: ApiStreamChunk[] = [];
-    for await (const chunk of apiRequestService.performApiRequest(mockApi, options)) {
-      chunks.push(chunk);
-    }
+    const abortController = new AbortController();
+    const requestPromise = service.performRequest('test-url', {
+      method: 'POST',
+      body: JSON.stringify({ test: 'data' }),
+      signal: abortController.signal
+    }, () => {});
 
-    expect(chunks).toHaveLength(0);
+    abortController.abort();
+
+    await expect(requestPromise).rejects.toThrow('Request aborted');
   });
 }); 

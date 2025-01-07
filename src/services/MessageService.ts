@@ -21,7 +21,7 @@ export class MessageService {
     this.processingPipeline = new MessageProcessingPipeline();
     this.conversationHistoryService = conversationHistoryService;
     this.taskMetricsService = taskMetricsService || new TaskMetricsService();
-    this.taskManagementService = taskManagementService || new TaskManagementService(this.taskMetricsService);
+    this.taskManagementService = taskManagementService || new TaskManagementService();
   }
 
   ask(type: ClineAsk, text?: string): Observable<ClineAskResponse> {
@@ -33,16 +33,16 @@ export class MessageService {
     };
 
     return from(this.startNewTask()).pipe(
-      switchMap(task => from(this.processingPipeline.processMessage(message)).pipe(
+      switchMap(taskId => from(this.processingPipeline.processMessage(message)).pipe(
         tap(processedMessage => {
-          this.updateTaskMetrics(task.id, processedMessage);
+          this.updateTaskMetrics(taskId, processedMessage);
         }),
         switchMap(async (processedMessage) => {
           await this.conversationHistoryService.addMessage(processedMessage);
-          return { response: 'messageResponse', text: '', images: [] } as unknown as ClineAskResponse;
+          return 'messageResponse' as ClineAskResponse;
         }),
         catchError(error => {
-          this.handleError(error, task.id);
+          this.handleError(error, taskId);
           throw error;
         })
       ))
@@ -62,7 +62,7 @@ export class MessageService {
     return from(Promise.resolve()).pipe(
       tap(() => {
         this.conversationHistoryService.setProcessing(true);
-        this.conversationHistoryService.updateMessage(message);
+        this.conversationHistoryService.addMessage(message);
       }),
       tap(() => this.conversationHistoryService.setProcessing(false)),
       catchError(error => {
@@ -72,15 +72,18 @@ export class MessageService {
     );
   }
 
-  private async startNewTask() {
+  private async startNewTask(): Promise<string> {
     const currentTask = this.taskManagementService.getCurrentTask();
     if (currentTask) {
-      await this.taskManagementService.endTask(currentTask.id);
+      this.taskManagementService.endTask(currentTask.id);
     }
     return this.taskManagementService.startTask();
   }
 
   private updateTaskMetrics(taskId: string, message: ClineMessage) {
+    // Initialize metrics for new task
+    this.taskMetricsService.initializeMetrics(taskId);
+
     // Update token count and cost based on message content
     if (message.apiReqInfo) {
       if (message.apiReqInfo.tokensIn) {
@@ -119,7 +122,7 @@ export class MessageService {
     this.conversationHistoryService.setProcessing(false);
     
     if (taskId) {
-      this.taskManagementService.failTask(taskId, error);
+      this.taskManagementService.failTask(taskId);
     }
   }
 
@@ -135,29 +138,25 @@ export class MessageService {
     return this.taskManagementService.getCurrentTask();
   }
 
-  getAllTasks() {
-    return this.taskManagementService.getAllTasks();
+  updateMessageContent(ts: number, content: string) {
+    const currentState = this.conversationHistoryService.getCurrentState();
+    const message = currentState.messages.find(m => m.ts === ts);
+    if (message) {
+      this.conversationHistoryService.updateMessage({
+        ...message,
+        text: content
+      });
+    }
   }
 
-  updatePartialMessage(message: ClineMessage) {
-    if (message.partial) {
-      const currentState = this.conversationHistoryService.getCurrentState();
-      const lastMessage = currentState.messages[currentState.messages.length - 1];
-      
-      if (lastMessage && lastMessage.partial && 
-          lastMessage.type === message.type &&
-          ((lastMessage.ask && message.ask && lastMessage.ask === message.ask) ||
-           (lastMessage.say && message.say && lastMessage.say === message.say))) {
-        this.conversationHistoryService.updateMessage({
-          ...lastMessage,
-          text: message.text,
-          images: message.images
-        });
-      } else {
-        this.conversationHistoryService.updateMessage(message);
-      }
-    } else {
-      this.conversationHistoryService.updateMessage(message);
+  appendMessageContent(ts: number, content: string) {
+    const currentState = this.conversationHistoryService.getCurrentState();
+    const message = currentState.messages.find(m => m.ts === ts);
+    if (message) {
+      this.conversationHistoryService.updateMessage({
+        ...message,
+        text: (message.text || '') + content
+      });
     }
   }
 } 

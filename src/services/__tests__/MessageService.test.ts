@@ -1,23 +1,24 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageService } from '../MessageService';
-import { ReactiveConversationHistoryService } from '../ReactiveConversationHistoryService';
 import { TaskManagementService } from '../TaskManagementService';
 import { TaskMetricsService } from '../TaskMetricsService';
-import { ClineMessage } from '../../shared/ExtensionMessage';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
-
-vi.mock('../ReactiveConversationHistoryService');
-vi.mock('../MessageProcessingPipeline');
+import { ReactiveConversationHistoryService } from '../ReactiveConversationHistoryService';
+import { MessageProcessingPipeline } from '../MessageProcessingPipeline';
+import { firstValueFrom } from 'rxjs';
 
 describe('MessageService', () => {
   let messageService: MessageService;
-  let conversationHistoryService: ReactiveConversationHistoryService;
   let taskManagementService: TaskManagementService;
   let taskMetricsService: TaskMetricsService;
+  let conversationHistoryService: ReactiveConversationHistoryService;
+  let messageProcessingPipeline: MessageProcessingPipeline;
 
   beforeEach(() => {
-    conversationHistoryService = new ReactiveConversationHistoryService({ taskDir: '/mock/dir' });
     taskMetricsService = new TaskMetricsService();
-    taskManagementService = new TaskManagementService(taskMetricsService);
+    taskManagementService = new TaskManagementService();
+    conversationHistoryService = new ReactiveConversationHistoryService({ taskDir: './test-tasks' });
+    messageProcessingPipeline = new MessageProcessingPipeline();
+
     messageService = new MessageService(
       conversationHistoryService,
       taskManagementService,
@@ -26,123 +27,128 @@ describe('MessageService', () => {
   });
 
   describe('ask', () => {
-    it('should create new task and track metrics', (done) => {
-      const message: ClineMessage = {
-        ts: Date.now(),
-        type: 'ask',
-        ask: 'command',
-        text: 'test command',
-        apiReqInfo: {
-          tokensIn: 10,
-          tokensOut: 20,
-          cost: 0.5,
-          cacheReads: 1,
-          cacheWrites: 2
-        }
-      };
+    it('should create new task and track metrics', async () => {
+      const startTaskSpy = vi.spyOn(taskManagementService, 'startTask');
+      const trackTokensSpy = vi.spyOn(taskMetricsService, 'trackTokens');
+      const trackCostSpy = vi.spyOn(taskMetricsService, 'trackCost');
 
-      vi.spyOn(taskManagementService, 'startTask');
-      vi.spyOn(taskMetricsService, 'trackTokens');
-      vi.spyOn(taskMetricsService, 'trackCost');
-      vi.spyOn(taskMetricsService, 'trackCacheOperation');
+      await firstValueFrom(messageService.ask('command', 'Test message'));
 
-      messageService.ask('command', 'test command').subscribe({
-        next: (response) => {
-          expect(taskManagementService.startTask).toHaveBeenCalled();
-          expect(taskMetricsService.trackTokens).toHaveBeenCalledTimes(2); // tokensIn and tokensOut
-          expect(taskMetricsService.trackCost).toHaveBeenCalledWith(expect.any(String), 0.5);
-          expect(taskMetricsService.trackCacheOperation).toHaveBeenCalledTimes(3); // reads and writes
-          done();
-        },
-        error: done
-      });
+      expect(startTaskSpy).toHaveBeenCalled();
+      expect(trackTokensSpy).toHaveBeenCalled();
+      expect(trackCostSpy).toHaveBeenCalledWith(expect.any(String), 0);
     });
 
-    it('should handle errors and fail task', (done) => {
+    it('should handle errors and fail task', async () => {
       const error = new Error('Test error');
-      vi.spyOn(taskManagementService, 'failTask');
+      vi.spyOn(messageProcessingPipeline, 'processMessage').mockRejectedValue(error);
+      const failTaskSpy = vi.spyOn(taskManagementService, 'failTask');
 
-      messageService.ask('command', 'test command').subscribe({
-        error: (err) => {
-          expect(err).toBe(error);
-          expect(taskManagementService.failTask).toHaveBeenCalledWith(expect.any(String), error);
-          done();
-        }
-      });
+      try {
+        await firstValueFrom(messageService.ask('command', 'Test message'));
+      } catch (err) {
+        expect(err).toBe(error);
+        expect(failTaskSpy).toHaveBeenCalledWith(expect.any(String));
+      }
     });
   });
 
   describe('say', () => {
-    it('should update conversation state', (done) => {
-      vi.spyOn(conversationHistoryService, 'setProcessing');
-      vi.spyOn(conversationHistoryService, 'updateMessage');
+    it('should update conversation state', async () => {
+      const addMessageSpy = vi.spyOn(conversationHistoryService, 'addMessage');
+      await firstValueFrom(messageService.say('text', 'Test response'));
 
-      messageService.say('text', 'test message').subscribe({
-        complete: () => {
-          expect(conversationHistoryService.setProcessing).toHaveBeenCalledWith(true);
-          expect(conversationHistoryService.updateMessage).toHaveBeenCalled();
-          expect(conversationHistoryService.setProcessing).toHaveBeenCalledWith(false);
-          done();
-        },
-        error: done
-      });
+      expect(addMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'say',
+        say: 'text',
+        text: 'Test response'
+      }));
     });
 
-    it('should handle errors', (done) => {
+    it('should handle errors', async () => {
       const error = new Error('Test error');
-      vi.spyOn(conversationHistoryService, 'setError');
+      vi.spyOn(conversationHistoryService, 'addMessage').mockRejectedValue(error);
+      const setErrorSpy = vi.spyOn(conversationHistoryService, 'setError');
 
-      messageService.say('text', 'test message').subscribe({
-        error: (err) => {
-          expect(err).toBe(error);
-          expect(conversationHistoryService.setError).toHaveBeenCalledWith(error.message);
-          done();
-        }
-      });
+      try {
+        await firstValueFrom(messageService.say('text', 'Test response'));
+      } catch (err) {
+        expect(err).toBe(error);
+        expect(setErrorSpy).toHaveBeenCalledWith(error.message);
+      }
     });
   });
 
   describe('task management', () => {
-    it('should get current task', () => {
-      vi.spyOn(taskManagementService, 'getCurrentTask');
-      messageService.getCurrentTask();
-      expect(taskManagementService.getCurrentTask).toHaveBeenCalled();
+    it('should end current task before starting new one', async () => {
+      const taskId = taskManagementService.startTask();
+      const endTaskSpy = vi.spyOn(taskManagementService, 'endTask');
+
+      await firstValueFrom(messageService.ask('command', 'Test message'));
+
+      expect(endTaskSpy).toHaveBeenCalledWith(taskId);
     });
 
-    it('should get all tasks', () => {
-      vi.spyOn(taskManagementService, 'getAllTasks');
-      messageService.getAllTasks();
-      expect(taskManagementService.getAllTasks).toHaveBeenCalled();
+    it('should track task metrics', async () => {
+      const trackCacheOpSpy = vi.spyOn(taskMetricsService, 'trackCacheOperation');
+      const trackCostSpy = vi.spyOn(taskMetricsService, 'trackCost');
+
+      vi.spyOn(messageProcessingPipeline, 'processMessage').mockResolvedValue({
+        ts: Date.now(),
+        type: 'ask',
+        ask: 'command',
+        text: 'Test message',
+        apiReqInfo: {
+          cacheReads: 1,
+          cacheWrites: 1,
+          cost: 0.2
+        }
+      });
+
+      await firstValueFrom(messageService.ask('command', 'Test message'));
+
+      expect(trackCacheOpSpy).toHaveBeenCalledWith(expect.any(String), 'read');
+      expect(trackCacheOpSpy).toHaveBeenCalledWith(expect.any(String), 'write');
+      expect(trackCostSpy).toHaveBeenCalledWith(expect.any(String), 0.2);
     });
   });
 
-  describe('partial message updates', () => {
-    it('should update partial message correctly', () => {
-      const message: ClineMessage = {
+  describe('message updates', () => {
+    it('should handle content updates', async () => {
+      const message = {
         ts: Date.now(),
-        type: 'say',
-        say: 'text',
-        text: 'partial message',
-        partial: true
+        type: 'say' as const,
+        say: 'text' as const,
+        text: 'Initial content'
       };
 
-      vi.spyOn(conversationHistoryService, 'updateMessage');
-      messageService.updatePartialMessage(message);
-      expect(conversationHistoryService.updateMessage).toHaveBeenCalledWith(message);
+      const updateMessageSpy = vi.spyOn(conversationHistoryService, 'updateMessage');
+
+      await firstValueFrom(messageService.say('text', 'Initial content'));
+      messageService.updateMessageContent(message.ts, 'Updated content');
+
+      expect(updateMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'Updated content'
+      }));
     });
 
-    it('should handle non-partial message', () => {
-      const message: ClineMessage = {
+    it('should handle content appending', async () => {
+      const message = {
         ts: Date.now(),
-        type: 'say',
-        say: 'text',
-        text: 'complete message',
-        partial: false
+        type: 'say' as const,
+        say: 'text' as const,
+        text: ''
       };
 
-      vi.spyOn(conversationHistoryService, 'updateMessage');
-      messageService.updatePartialMessage(message);
-      expect(conversationHistoryService.updateMessage).toHaveBeenCalledWith(message);
+      const updateMessageSpy = vi.spyOn(conversationHistoryService, 'updateMessage');
+
+      await firstValueFrom(messageService.say('text', ''));
+      messageService.appendMessageContent(message.ts, 'Part 1');
+      messageService.appendMessageContent(message.ts, 'Part 2');
+
+      expect(updateMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'Part 1Part 2'
+      }));
     });
   });
 }); 

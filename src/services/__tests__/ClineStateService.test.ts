@@ -1,6 +1,5 @@
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ClineStateService } from '../ClineStateService';
-import { Anthropic } from '@anthropic-ai/sdk';
-import { firstValueFrom } from 'rxjs';
 
 describe('ClineStateService', () => {
   let stateService: ClineStateService;
@@ -9,140 +8,87 @@ describe('ClineStateService', () => {
     stateService = new ClineStateService();
   });
 
-  afterEach(() => {
-    stateService.dispose();
-  });
+  describe('abort state management', () => {
+    it('should update abort state', () => {
+      stateService.updateAbort(true);
+      expect(stateService.getCurrentState().abort).toBe(true);
+    });
 
-  // Abort State Management Tests
-  describe('Abort State Management', () => {
-    it('should set and reset abort state', async () => {
-      // Test setAbort method
-      stateService.setAbort(true);
-      expect(stateService.isAborted).toBe(true);
-
-      // Verify via observable
-      const abortPromise = firstValueFrom(stateService.abort$);
-      stateService.setAbort(true);
-      const abort = await abortPromise;
-      expect(abort).toBe(true);
-
-      // Test reset
-      stateService.resetAbort();
-      expect(stateService.isAborted).toBe(false);
+    it('should throw error for invalid abort state', () => {
+      expect(() => stateService.updateAbort('invalid' as any)).toThrow('Invalid abort state');
     });
   });
 
-  // User Content Validation Tests
-  describe('User Content Validation', () => {
-    const validTextBlock: Anthropic.TextBlockParam = {
-      type: 'text',
-      text: 'Test text'
-    };
-
-    const validImageBlock: Anthropic.ImageBlockParam = {
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: 'image/png',
-        data: 'base64encodedimage'
-      }
-    };
-
-    const validToolUseBlock: Anthropic.ToolUseBlockParam = {
-      type: 'tool_use',
-      id: 'tool-123',
-      name: 'test_tool',
-      input: {}
-    };
-
-    const invalidBlock = {
-      type: 'invalid_type'
-    };
-
-    it('should validate user content correctly', () => {
-      const validContent = [validTextBlock, validImageBlock, validToolUseBlock];
-      const invalidContent = [validTextBlock, invalidBlock];
-
-      expect(stateService.isValidUserContent(validContent)).toBe(true);
-      expect(stateService.isValidUserContent(invalidContent)).toBe(false);
+  describe('streaming state management', () => {
+    it('should update streaming state', () => {
+      stateService.updateIsStreaming(true);
+      expect(stateService.getCurrentState().isStreaming).toBe(true);
     });
 
-    it('should set user message content only for valid content', () => {
-      const validContent = [validTextBlock, validImageBlock];
-      const invalidContent = [validTextBlock, invalidBlock];
-
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
-
-      // Test valid content
-      stateService.setCurrentUserMessageContent(validContent);
-      expect(stateService.userMessageContent).toEqual(validContent);
-
-      // Test invalid content
-      stateService.setCurrentUserMessageContent(invalidContent);
-      expect(consoleSpy).toHaveBeenCalledWith('Invalid user content provided', invalidContent);
-
-      consoleSpy.mockRestore();
+    it('should throw error for invalid streaming state', () => {
+      expect(() => stateService.updateIsStreaming('invalid' as any)).toThrow('Invalid streaming state');
     });
   });
 
-  // Streaming State Tests
-  describe('Streaming State Management', () => {
-    it('should manage streaming state', async () => {
-      // Test setting streaming state
-      stateService.setIsStreaming(true);
-      const isStreamingPromise = firstValueFrom(stateService.isStreaming$);
-      const isStreaming = await isStreamingPromise;
-      expect(isStreaming).toBe(true);
+  describe('user message content management', () => {
+    it('should set user message content', () => {
+      const content = [{ type: 'text', text: 'test' }];
+      stateService.setUserMessageContent(content);
+      expect(stateService.getCurrentState().userMessageContent).toEqual(content);
+    });
 
-      // Test resetting streaming state
-      stateService.setIsStreaming(false);
-      const isNotStreamingPromise = firstValueFrom(stateService.isStreaming$);
-      const isNotStreaming = await isNotStreamingPromise;
-      expect(isNotStreaming).toBe(false);
+    it('should throw error for invalid user message content', () => {
+      expect(() => stateService.setUserMessageContent('invalid' as any)).toThrow('Invalid user message content');
+    });
+
+    it('should throw error for invalid content block type', () => {
+      expect(() => stateService.setUserMessageContent([{ type: 'invalid' }])).toThrow('Invalid content block type');
     });
   });
 
-  // Additional State Management Tests
-  describe('Additional State Management', () => {
-    it('should manage user message content ready state', () => {
-      stateService.setUserMessageContentReady(true);
-      expect(stateService.userMessageContentReady).toBe(true);
-
-      stateService.setUserMessageContentReady(false);
-      expect(stateService.userMessageContentReady).toBe(false);
+  describe('user message content ready management', () => {
+    it('should update user message content ready state', () => {
+      stateService.updateUserMessageContentReady(true);
+      expect(stateService.getCurrentState().userMessageContentReady).toBe(true);
     });
 
-    it('should manage assistant message content', () => {
-      const testContent = [{ 
-        type: 'text', 
-        content: 'Test assistant message',
-        partial: false 
-      }];
-
-      stateService.setCurrentAssistantMessageContent(testContent);
-      expect(stateService.getCurrentAssistantMessageContent()).toEqual(testContent);
+    it('should throw error for invalid ready state', () => {
+      expect(() => stateService.updateUserMessageContentReady('invalid' as any)).toThrow('Invalid ready state');
     });
   });
 
-  // Consecutive Auto-Approved Requests Tests
-  describe('Consecutive Auto-Approved Requests', () => {
-    it('should increment and reset consecutive auto-approved requests', () => {
+  describe('assistant message content management', () => {
+    it('should set assistant message content', () => {
+      const content = [{ type: 'text', text: 'test' }];
+      stateService.setAssistantMessageContent(content);
+      expect(stateService.getCurrentState().assistantMessageContent).toEqual(content);
+    });
+
+    it('should throw error for invalid assistant message content', () => {
+      expect(() => stateService.setAssistantMessageContent('invalid' as any)).toThrow('Invalid assistant message content');
+    });
+  });
+
+  describe('consecutive auto approved requests management', () => {
+    it('should increment consecutive auto approved requests', () => {
       stateService.incrementConsecutiveAutoApprovedRequests();
-      stateService.incrementConsecutiveAutoApprovedRequests();
-      let state = stateService.getCurrentState();
-      expect(state.consecutiveAutoApprovedRequestsCount).toBe(2);
+      expect(stateService.getCurrentState().consecutiveAutoApprovedRequests).toBe(1);
+    });
 
+    it('should reset consecutive auto approved requests', () => {
+      stateService.incrementConsecutiveAutoApprovedRequests();
       stateService.resetConsecutiveAutoApprovedRequests();
-      state = stateService.getCurrentState();
-      expect(state.consecutiveAutoApprovedRequestsCount).toBe(0);
+      expect(stateService.getCurrentState().consecutiveAutoApprovedRequests).toBe(0);
     });
   });
 
-  // Invalid State Updates Tests
-  describe('Invalid State Updates', () => {
-    it('should throw error for invalid state updates', () => {
-      expect(() => stateService.updateIsStreaming(null as any)).toThrow('Invalid input');
-      expect(() => stateService.updateAbort(undefined as any)).toThrow('Invalid input');
+  describe('state updates', () => {
+    it('should emit state updates', (done) => {
+      stateService.getStateUpdates().subscribe((state) => {
+        expect(state.abort).toBe(true);
+        done();
+      });
+      stateService.updateAbort(true);
     });
   });
 });
