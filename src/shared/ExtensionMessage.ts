@@ -59,6 +59,10 @@ export interface ClineMessage {
 	conversationHistoryIndex?: number
 	conversationHistoryDeletedRange?: [number, number] // for when conversation history is truncated for API requests
 	role?: "user" | "assistant"
+	cacheRead?: boolean
+	cacheWrite?: boolean
+	cost?: number
+	apiReqInfo?: ClineApiReqInfo
 }
 
 export type ClineAsk =

@@ -4,14 +4,24 @@ import { ClineMessage, ClineAsk, ClineSay, ClineAskResponse } from '../shared/Ex
 import { ReactiveConversationHistoryService } from './ReactiveConversationHistoryService';
 import { MessageProcessingPipeline } from './MessageProcessingPipeline';
 import { ConversationState } from '../services/ConversationStateService';
+import { TaskManagementService } from './TaskManagementService';
+import { TaskMetricsService } from './TaskMetricsService';
 
 export class MessageService {
   private processingPipeline: MessageProcessingPipeline;
   private conversationHistoryService: ReactiveConversationHistoryService;
+  private taskManagementService: TaskManagementService;
+  private taskMetricsService: TaskMetricsService;
 
-  constructor(conversationHistoryService: ReactiveConversationHistoryService) {
+  constructor(
+    conversationHistoryService: ReactiveConversationHistoryService,
+    taskManagementService?: TaskManagementService,
+    taskMetricsService?: TaskMetricsService
+  ) {
     this.processingPipeline = new MessageProcessingPipeline();
     this.conversationHistoryService = conversationHistoryService;
+    this.taskMetricsService = taskMetricsService || new TaskMetricsService();
+    this.taskManagementService = taskManagementService || new TaskManagementService(this.taskMetricsService);
   }
 
   ask(type: ClineAsk, text?: string): Observable<ClineAskResponse> {
@@ -22,15 +32,20 @@ export class MessageService {
       text,
     };
 
-    return from(this.processingPipeline.processMessage(message)).pipe(
-      switchMap(async (processedMessage) => {
-        await this.conversationHistoryService.addMessage(processedMessage);
-        return { response: 'messageResponse', text: '', images: [] } as unknown as ClineAskResponse;
-      }),
-      catchError(error => {
-        console.error('Error processing ask message:', error);
-        throw error;
-      })
+    return from(this.startNewTask()).pipe(
+      switchMap(task => from(this.processingPipeline.processMessage(message)).pipe(
+        tap(processedMessage => {
+          this.updateTaskMetrics(task.id, processedMessage);
+        }),
+        switchMap(async (processedMessage) => {
+          await this.conversationHistoryService.addMessage(processedMessage);
+          return { response: 'messageResponse', text: '', images: [] } as unknown as ClineAskResponse;
+        }),
+        catchError(error => {
+          this.handleError(error, task.id);
+          throw error;
+        })
+      ))
     );
   }
 
@@ -56,21 +71,56 @@ export class MessageService {
       })
     );
   }
-  private async processAskMessage(message: ClineMessage): Promise<{
-    response: ClineAskResponse;
-    text?: string;
-    images?: string[];
-  }> {
-    // This will be integrated with the existing Cline class functionality
-    return {
-      response: 'messageResponse',
-      text: '',
-      images: []
-    };
+
+  private async startNewTask() {
+    const currentTask = this.taskManagementService.getCurrentTask();
+    if (currentTask) {
+      await this.taskManagementService.endTask(currentTask.id);
+    }
+    return this.taskManagementService.startTask();
   }
-  private handleError(error: any) {
+
+  private updateTaskMetrics(taskId: string, message: ClineMessage) {
+    // Update token count and cost based on message content
+    if (message.apiReqInfo) {
+      if (message.apiReqInfo.tokensIn) {
+        this.taskMetricsService.trackTokens(taskId, message.apiReqInfo.tokensIn);
+      }
+      if (message.apiReqInfo.tokensOut) {
+        this.taskMetricsService.trackTokens(taskId, message.apiReqInfo.tokensOut);
+      }
+      if (message.apiReqInfo.cacheReads) {
+        this.taskMetricsService.trackCacheOperation(taskId, 'read');
+      }
+      if (message.apiReqInfo.cacheWrites) {
+        this.taskMetricsService.trackCacheOperation(taskId, 'write');
+      }
+      if (message.apiReqInfo.cost) {
+        this.taskMetricsService.trackCost(taskId, message.apiReqInfo.cost);
+      }
+    } else {
+      // Fallback to simple estimation if no API info
+      const estimatedTokens = this.estimateTokenCount(message);
+      this.taskMetricsService.trackTokens(taskId, estimatedTokens);
+    }
+
+    // Update task metrics in management service
+    this.taskManagementService.updateTaskMetrics(taskId, this.taskMetricsService.getMetrics(taskId));
+  }
+
+  private estimateTokenCount(message: ClineMessage): number {
+    // Simple estimation based on text length
+    // In a real implementation, this would use a proper tokenizer
+    return message.text?.length || 0;
+  }
+
+  private handleError(error: any, taskId?: string) {
     this.conversationHistoryService.setError(error.message || 'An error occurred');
     this.conversationHistoryService.setProcessing(false);
+    
+    if (taskId) {
+      this.taskManagementService.failTask(taskId, error);
+    }
   }
 
   getState(): Observable<ConversationState> {
@@ -79,6 +129,14 @@ export class MessageService {
 
   getMessages(): Observable<ClineMessage[]> {
     return this.conversationHistoryService.getMessages();
+  }
+
+  getCurrentTask() {
+    return this.taskManagementService.getCurrentTask();
+  }
+
+  getAllTasks() {
+    return this.taskManagementService.getAllTasks();
   }
 
   updatePartialMessage(message: ClineMessage) {
