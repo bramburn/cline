@@ -72,6 +72,7 @@ import { ApiRequestService } from '../services/ApiRequestService';
 import { Subject } from 'rxjs';
 import { ClineStateService } from '../services/ClineStateService';
 import { ToolExecutionService } from '../services/ToolExecutionService';
+import { ReactiveConversationHistoryService } from '../services/ReactiveConversationHistoryService';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -107,7 +108,7 @@ export class Cline {
 	private readonly clineStateService: ClineStateService;
 	private readonly providerRef: WeakRef<ClineProvider>;
 	private readonly abortSubject: Subject<boolean>;
-	private conversationHistoryService!: ConversationHistoryService;
+	private conversationHistoryService!: ReactiveConversationHistoryService;
 	private readonly toolExecutionService: ToolExecutionService;
 
 	private didEditFile: boolean = false;
@@ -178,10 +179,7 @@ export class Cline {
 		this.autoApprovalSettings = autoApprovalSettings;
 		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
 		this.apiRequestService = new ApiRequestService();
-		this.messageService = new MessageService({
-			conversationStateService: this.conversationStateService,
-			clineStateService: this.clineStateService
-		});
+		this.messageService = new MessageService(this.conversationHistoryService); // Pass the correct instance
 		this.conversationStateService = new ConversationStateService(historyItem);
 		this.clineStateService = new ClineStateService();
 		this.abortSubject = new Subject<boolean>();
@@ -196,7 +194,7 @@ export class Cline {
 		const taskDir = await this.ensureTaskDirectoryExists();
 		const initialHistory = this.historyItem ? await this.getSavedApiConversationHistory() : [];
 		
-		this.conversationHistoryService = new ConversationHistoryService({ 
+		this.conversationHistoryService = new ReactiveConversationHistoryService({ 
 			taskDir,
 			initialHistory
 		});
@@ -223,7 +221,7 @@ export class Cline {
 	private async initializeConversationHistoryService(historyItem?: HistoryItem) {
 		const taskDir = await this.ensureTaskDirectoryExists();
 		const initialHistory = historyItem ? await this.getSavedApiConversationHistory() : [];
-		this.conversationHistoryService = new ConversationHistoryService({ taskDir, initialHistory });
+		this.conversationHistoryService = new ReactiveConversationHistoryService({ taskDir, initialHistory });
 	}
 
 	// Storing task to disk for history
@@ -624,17 +622,21 @@ export class Cline {
 		this.conversationStateService.setProcessing(true);
 		
 		try {
-			const result = await firstValueFrom(this.messageService.ask(type, text).pipe(
+			const result = await firstValueFrom(this.messageService.ask(type, text, partial).pipe(
 				tap(response => {
 					if (response === 'messageResponse') {
 						this.conversationStateService.updateMessage({
 							type: 'ask',
 							text: text || '',
 							ts: Date.now(),
-							// You can handle 'partial' logic here if needed
+							partial: partial
 						});
 					}
 				}),
+				catchError(error => {
+					this.conversationStateService.setError(error.message);
+					throw error;
+				})
 			));
 
 			this.conversationStateService.setProcessing(false);
