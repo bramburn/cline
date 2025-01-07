@@ -71,6 +71,7 @@ import { PatternAnalysis, ErrorReport } from '../types/ToolCallOptimization';
 import { ApiRequestService } from '../services/ApiRequestService';
 import { Subject } from 'rxjs';
 import { ClineStateService } from '../services/ClineStateService';
+import { ToolExecutionService } from '../services/ToolExecutionService';
 
 const cwd = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
@@ -107,6 +108,7 @@ export class Cline {
 	private readonly providerRef: WeakRef<ClineProvider>;
 	private readonly abortSubject: Subject<boolean>;
 	private conversationHistoryService!: ConversationHistoryService;
+	private readonly toolExecutionService: ToolExecutionService;
 
 	private didEditFile: boolean = false;
 	private customInstructions?: string;
@@ -176,7 +178,10 @@ export class Cline {
 		this.autoApprovalSettings = autoApprovalSettings;
 		this.toolCallOptimizationAgent = new ToolCallOptimizationAgent();
 		this.apiRequestService = new ApiRequestService();
-		this.messageService = new MessageService();
+		this.messageService = new MessageService({
+			conversationStateService: this.conversationStateService,
+			clineStateService: this.clineStateService
+		});
 		this.conversationStateService = new ConversationStateService(historyItem);
 		this.clineStateService = new ClineStateService();
 		this.abortSubject = new Subject<boolean>();
@@ -184,6 +189,7 @@ export class Cline {
 		this.task = task;
 		this.images = images;
 		this.historyItem = historyItem;
+		this.toolExecutionService = new ToolExecutionService(this.toolCallOptimizationAgent);
 	}
 
 	private async initialize(): Promise<void> {
@@ -1888,5 +1894,12 @@ export class Cline {
 		} else {
 			throw new Error('Invalid user content');
 		}
+	}
+
+	// Helper method to find tool by name
+	private findToolByName(name: string): any {
+		// Implement logic to find and return the tool
+		// This is a placeholder and should be replaced with actual implementation
+		return null;
 	}
 }
