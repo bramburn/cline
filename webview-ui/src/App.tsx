@@ -1,3 +1,4 @@
+import React from 'react';
 import { useCallback, useEffect, useState } from "react"
 import { useEvent } from "react-use"
 import { ExtensionMessage } from "../../src/shared/ExtensionMessage"
@@ -8,6 +9,16 @@ import WelcomeView from "./components/welcome/WelcomeView"
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
 import { vscode } from "./utils/vscode"
 import McpView from "./components/mcp/McpView"
+import { StoreProvider, store } from './store';
+import NotificationCenter from './components/notifications/NotificationCenter';
+import styled from 'styled-components';
+
+const AppWrapper = styled.div`
+	position: relative;
+	height: 100vh;
+	width: 100vw;
+	overflow: hidden;
+`;
 
 const AppContent = () => {
 	const { didHydrateState, showWelcome, shouldShowAnnouncement } = useExtensionState()
@@ -89,9 +100,14 @@ const AppContent = () => {
 
 const App = () => {
 	return (
-		<ExtensionStateContextProvider>
-			<AppContent />
-		</ExtensionStateContextProvider>
+		<StoreProvider value={store}>
+			<ExtensionStateContextProvider>
+				<AppWrapper>
+					<AppContent />
+					<NotificationCenter />
+				</AppWrapper>
+			</ExtensionStateContextProvider>
+		</StoreProvider>
 	)
 }
 
