@@ -1,110 +1,164 @@
 import { BehaviorSubject, Observable } from 'rxjs';
-import { tap, distinctUntilChanged } from 'rxjs/operators';
+import { Anthropic } from '@anthropic-ai/sdk';
 
-export interface ClineState {
-  isStreaming: boolean;
-  abort: boolean;
-  abandoned: boolean;
-  consecutiveAutoApprovedRequestsCount: number;
-  consecutiveMistakeCount: number;
+export interface AssistantMessageContent {
+  type: string;
+  content?: string;
+  partial?: boolean;
+  name?: string;
+  params?: Record<string, any>;
 }
 
 export class ClineStateService {
-  // Private BehaviorSubjects for state management
-  private _isStreamingSubject = new BehaviorSubject<boolean>(false);
-  private _abortSubject = new BehaviorSubject<boolean>(false);
-  private _abandonedSubject = new BehaviorSubject<boolean>(false);
-  private _consecutiveAutoApprovedRequestsSubject = new BehaviorSubject<number>(0);
-  private _consecutiveMistakeCountSubject = new BehaviorSubject<number>(0);
+  private isStreamingSubject = new BehaviorSubject<boolean>(false);
+  private abortSubject = new BehaviorSubject<boolean>(false);
+  private didCompleteReadingStreamSubject = new BehaviorSubject<boolean>(false);
+  private userMessageContentReadySubject = new BehaviorSubject<boolean>(false);
+  private didRejectToolSubject = new BehaviorSubject<boolean>(false);
+  private didAlreadyUseToolSubject = new BehaviorSubject<boolean>(false);
+  private assistantMessageContentSubject = new BehaviorSubject<AssistantMessageContent[]>([]);
+  private userMessageContentSubject = new BehaviorSubject<(Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]>([]);
+  private presentAssistantMessageLockedSubject = new BehaviorSubject<boolean>(false);
+  private presentAssistantMessageHasPendingUpdatesSubject = new BehaviorSubject<boolean>(false);
+  private currentStreamingContentIndexSubject = new BehaviorSubject<number>(0);
 
-  // Public observables for state tracking
-  public isStreaming$: Observable<boolean> = this._isStreamingSubject.asObservable().pipe(
-    distinctUntilChanged(),
-    tap(value => this.logStateChange('isStreaming', value))
-  );
+  // Observables for external access
+  isStreaming$: Observable<boolean> = this.isStreamingSubject.asObservable();
+  abort$: Observable<boolean> = this.abortSubject.asObservable();
+  didCompleteReadingStream$: Observable<boolean> = this.didCompleteReadingStreamSubject.asObservable();
+  userMessageContentReady$: Observable<boolean> = this.userMessageContentReadySubject.asObservable();
+  didRejectTool$: Observable<boolean> = this.didRejectToolSubject.asObservable();
+  didAlreadyUseTool$: Observable<boolean> = this.didAlreadyUseToolSubject.asObservable();
 
-  public abort$: Observable<boolean> = this._abortSubject.asObservable().pipe(
-    distinctUntilChanged(),
-    tap(value => this.logStateChange('abort', value))
-  );
-
-  public abandoned$: Observable<boolean> = this._abandonedSubject.asObservable().pipe(
-    distinctUntilChanged(),
-    tap(value => this.logStateChange('abandoned', value))
-  );
-
-  public consecutiveAutoApprovedRequests$: Observable<number> = this._consecutiveAutoApprovedRequestsSubject.asObservable().pipe(
-    distinctUntilChanged(),
-    tap(value => this.logStateChange('consecutiveAutoApprovedRequests', value))
-  );
-
-  public consecutiveMistakeCount$: Observable<number> = this._consecutiveMistakeCountSubject.asObservable().pipe(
-    distinctUntilChanged(),
-    tap(value => this.logStateChange('consecutiveMistakeCount', value))
-  );
-
-  // State update methods with validation
-  public updateIsStreaming(value: boolean): void {
-    if (typeof value !== 'boolean') {
-      throw new Error('Invalid input: isStreaming must be a boolean');
-    }
-    this._isStreamingSubject.next(value);
+  // Setter methods
+  setIsStreaming(value: boolean): void {
+    this.isStreamingSubject.next(value);
   }
 
-  public updateAbort(value: boolean): void {
-    if (typeof value !== 'boolean') {
-      throw new Error('Invalid input: abort must be a boolean');
-    }
-    this._abortSubject.next(value);
+  setAbort(value: boolean): void {
+    this.abortSubject.next(value);
   }
 
-  public updateAbandoned(value: boolean): void {
-    if (typeof value !== 'boolean') {
-      throw new Error('Invalid input: abandoned must be a boolean');
-    }
-    this._abandonedSubject.next(value);
+  setDidCompleteReadingStream(value: boolean): void {
+    this.didCompleteReadingStreamSubject.next(value);
   }
 
-  public incrementConsecutiveAutoApprovedRequests(): void {
-    const currentValue = this._consecutiveAutoApprovedRequestsSubject.value;
-    this._consecutiveAutoApprovedRequestsSubject.next(currentValue + 1);
+  setUserMessageContentReady(value: boolean): void {
+    this.userMessageContentReadySubject.next(value);
   }
 
-  public resetConsecutiveAutoApprovedRequests(): void {
-    this._consecutiveAutoApprovedRequestsSubject.next(0);
+  setDidRejectTool(value: boolean): void {
+    this.didRejectToolSubject.next(value);
   }
 
-  public incrementConsecutiveMistakeCount(): void {
-    const currentValue = this._consecutiveMistakeCountSubject.value;
-    this._consecutiveMistakeCountSubject.next(currentValue + 1);
+  setDidAlreadyUseTool(value: boolean): void {
+    this.didAlreadyUseToolSubject.next(value);
   }
 
-  public resetConsecutiveMistakeCount(): void {
-    this._consecutiveMistakeCountSubject.next(0);
+  // New methods for additional state management
+  setCurrentAssistantMessageContent(content: AssistantMessageContent[]): void {
+    this.assistantMessageContentSubject.next(content);
   }
 
-  // Get current state snapshot
-  public getCurrentState(): ClineState {
-    return {
-      isStreaming: this._isStreamingSubject.value,
-      abort: this._abortSubject.value,
-      abandoned: this._abandonedSubject.value,
-      consecutiveAutoApprovedRequestsCount: this._consecutiveAutoApprovedRequestsSubject.value,
-      consecutiveMistakeCount: this._consecutiveMistakeCountSubject.value
-    };
+  setCurrentUserMessageContent(content: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]): void {
+    this.userMessageContentSubject.next(content);
   }
 
-  // Logging method for state changes
-  private logStateChange(stateName: string, value: any): void {
-    console.log(`[ClineStateService] State Change: ${stateName} = ${value}`);
+  setPresentAssistantMessageLocked(value: boolean): void {
+    this.presentAssistantMessageLockedSubject.next(value);
   }
 
-  // Dispose method to clean up subscriptions if needed
-  public dispose(): void {
-    this._isStreamingSubject.complete();
-    this._abortSubject.complete();
-    this._abandonedSubject.complete();
-    this._consecutiveAutoApprovedRequestsSubject.complete();
-    this._consecutiveMistakeCountSubject.complete();
+  setPresentAssistantMessageHasPendingUpdates(value: boolean): void {
+    this.presentAssistantMessageHasPendingUpdatesSubject.next(value);
+  }
+
+  setCurrentStreamingContentIndex(index: number): void {
+    this.currentStreamingContentIndexSubject.next(index);
+  }
+
+  // Getter methods for current values
+  getCurrentIsStreaming(): boolean {
+    return this.isStreamingSubject.value;
+  }
+
+  getCurrentAbort(): boolean {
+    return this.abortSubject.value;
+  }
+
+  getCurrentDidCompleteReadingStream(): boolean {
+    return this.didCompleteReadingStreamSubject.value;
+  }
+
+  getCurrentUserMessageContentReady(): boolean {
+    return this.userMessageContentReadySubject.value;
+  }
+
+  getCurrentDidRejectTool(): boolean {
+    return this.didRejectToolSubject.value;
+  }
+
+  getCurrentDidAlreadyUseTool(): boolean {
+    return this.didAlreadyUseToolSubject.value;
+  }
+
+  // New getter methods for additional state
+  getCurrentAssistantMessageContent(): AssistantMessageContent[] {
+    return this.assistantMessageContentSubject.value;
+  }
+
+  getCurrentUserMessageContent(): (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] {
+    return this.userMessageContentSubject.value;
+  }
+
+  getCurrentPresentAssistantMessageLocked(): boolean {
+    return this.presentAssistantMessageLockedSubject.value;
+  }
+
+  getCurrentPresentAssistantMessageHasPendingUpdates(): boolean {
+    return this.presentAssistantMessageHasPendingUpdatesSubject.value;
+  }
+
+  getCurrentStreamingContentIndex(): number {
+    return this.currentStreamingContentIndexSubject.value;
+  }
+
+  // Reset all states
+  resetAllStates(): void {
+    this.setIsStreaming(false);
+    this.setAbort(false);
+    this.setDidCompleteReadingStream(false);
+    this.setUserMessageContentReady(false);
+    this.setDidRejectTool(false);
+    this.setDidAlreadyUseTool(false);
+    this.setCurrentAssistantMessageContent([]);
+    this.setCurrentUserMessageContent([]);
+    this.setPresentAssistantMessageLocked(false);
+    this.setPresentAssistantMessageHasPendingUpdates(false);
+    this.setCurrentStreamingContentIndex(0);
+  }
+
+  // Add missing setter methods
+  setCurrentDidCompleteReadingStream(value: boolean): void {
+    this.didCompleteReadingStreamSubject.next(value);
+  }
+
+  setCurrentUserMessageContentReady(value: boolean): void {
+    this.userMessageContentReadySubject.next(value);
+  }
+
+  setCurrentDidRejectTool(value: boolean): void {
+    this.didRejectToolSubject.next(value);
+  }
+
+  setCurrentDidAlreadyUseTool(value: boolean): void {
+    this.didAlreadyUseToolSubject.next(value);
+  }
+
+  setCurrentPresentAssistantMessageLocked(value: boolean): void {
+    this.presentAssistantMessageLockedSubject.next(value);
+  }
+
+  setCurrentPresentAssistantMessageHasPendingUpdates(value: boolean): void {
+    this.presentAssistantMessageHasPendingUpdatesSubject.next(value);
   }
 }
