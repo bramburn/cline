@@ -12,17 +12,19 @@ import { MessageValidator } from '../validators/MessageValidator';
 import { MessageProcessingPipeline } from './MessageProcessingPipeline';
 import { TaskManagementService } from './TaskManagementService';
 import { TaskMetricsService } from './TaskMetricsService';
+import { IMessageService } from '../types/services/IMessageService';
+import { TYPES } from '../types';
 
 @injectable()
-export class MessageService {
+export class MessageService implements IMessageService {
   private state: BehaviorSubject<MessageState>;
   private validator: MessageValidator;
   private config: MessageServiceConfig;
 
   constructor(
-    @inject(MessageProcessingPipeline) private processingPipeline: MessageProcessingPipeline,
-    @inject(TaskManagementService) private taskManagementService: TaskManagementService,
-    @inject(TaskMetricsService) private taskMetricsService: TaskMetricsService,
+    @inject(TYPES.MessageProcessingPipeline) private processingPipeline: MessageProcessingPipeline,
+    @inject(TYPES.TaskManagementService) private taskManagementService: TaskManagementService,
+    @inject(TYPES.TaskMetricsService) private taskMetricsService: TaskMetricsService,
     config?: MessageServiceConfig
   ) {
     this.config = {
@@ -95,7 +97,7 @@ export class MessageService {
   }
 
   private estimateTokenCount(message: Message): number {
-    return Math.ceil(message.content.length / 4); // Simple estimation
+    return Math.ceil(message.content.length / 4);
   }
 
   private handleProcessingResult(result: MessageProcessingResult): void {

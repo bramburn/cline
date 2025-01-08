@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach } from 'vitest';
 import { CustomInstructionsService } from '../CustomInstructionsService';
 import { firstValueFrom } from 'rxjs';
 
@@ -21,6 +22,27 @@ describe('CustomInstructionsService', () => {
       expect(state.instructions.length).toBe(1);
       expect(state.instructions[0].title).toBe('Test Instruction');
       expect(state.instructions[0].content).toBe('This is a test instruction');
+      expect(state.instructions[0].isActive).toBe(true);
+      expect(state.instructions[0].id).toMatch(/^instruction-\d+$/);
+    });
+
+    it('should generate unique IDs for multiple instructions', async () => {
+      service.addInstruction({
+        title: 'First Instruction',
+        content: 'First content',
+        isActive: true
+      });
+
+      service.addInstruction({
+        title: 'Second Instruction',
+        content: 'Second content',
+        isActive: false
+      });
+
+      const state = await firstValueFrom(service.getInstructions());
+      
+      expect(state.instructions.length).toBe(2);
+      expect(state.instructions[0].id).not.toBe(state.instructions[1].id);
     });
   });
 
@@ -37,22 +59,50 @@ describe('CustomInstructionsService', () => {
 
       service.updateInstruction(instructionId, {
         title: 'Updated Instruction',
-        content: 'Updated content'
+        content: 'Updated content',
+        isActive: false
       });
 
       const updatedState = await firstValueFrom(service.getInstructions());
       
       expect(updatedState.instructions[0].title).toBe('Updated Instruction');
       expect(updatedState.instructions[0].content).toBe('Updated content');
+      expect(updatedState.instructions[0].isActive).toBe(false);
       expect(updatedState.instructions[0].updatedAt).toBeGreaterThanOrEqual(initialState.instructions[0].createdAt);
+    });
+
+    it('should not modify other instructions when updating', async () => {
+      service.addInstruction({
+        title: 'First Instruction',
+        content: 'First content',
+        isActive: true
+      });
+
+      service.addInstruction({
+        title: 'Second Instruction',
+        content: 'Second content',
+        isActive: false
+      });
+
+      const initialState = await firstValueFrom(service.getInstructions());
+      const firstInstructionId = initialState.instructions[0].id;
+
+      service.updateInstruction(firstInstructionId, {
+        title: 'Updated First Instruction'
+      });
+
+      const updatedState = await firstValueFrom(service.getInstructions());
+      
+      expect(updatedState.instructions[0].title).toBe('Updated First Instruction');
+      expect(updatedState.instructions[1].title).toBe('Second Instruction');
     });
   });
 
   describe('Deleting Instructions', () => {
-    it('should delete an instruction', async () => {
+    it('should delete an existing instruction', async () => {
       service.addInstruction({
         title: 'Instruction to Delete',
-        content: 'This will be deleted',
+        content: 'Delete me',
         isActive: true
       });
 
@@ -65,13 +115,37 @@ describe('CustomInstructionsService', () => {
       
       expect(updatedState.instructions.length).toBe(0);
     });
+
+    it('should not affect other instructions when deleting', async () => {
+      service.addInstruction({
+        title: 'First Instruction',
+        content: 'First content',
+        isActive: true
+      });
+
+      service.addInstruction({
+        title: 'Second Instruction',
+        content: 'Second content',
+        isActive: false
+      });
+
+      const initialState = await firstValueFrom(service.getInstructions());
+      const firstInstructionId = initialState.instructions[0].id;
+
+      service.deleteInstruction(firstInstructionId);
+
+      const updatedState = await firstValueFrom(service.getInstructions());
+      
+      expect(updatedState.instructions.length).toBe(1);
+      expect(updatedState.instructions[0].title).toBe('Second Instruction');
+    });
   });
 
   describe('Selecting Instructions', () => {
     it('should select an instruction', async () => {
       service.addInstruction({
-        title: 'Selectable Instruction',
-        content: 'This can be selected',
+        title: 'Instruction to Select',
+        content: 'Select me',
         isActive: true
       });
 
@@ -84,24 +158,56 @@ describe('CustomInstructionsService', () => {
       
       expect(updatedState.selectedInstructionId).toBe(instructionId);
     });
+
+    it('should change selected instruction', async () => {
+      service.addInstruction({
+        title: 'First Instruction',
+        content: 'First content',
+        isActive: true
+      });
+
+      service.addInstruction({
+        title: 'Second Instruction',
+        content: 'Second content',
+        isActive: false
+      });
+
+      const initialState = await firstValueFrom(service.getInstructions());
+      const firstInstructionId = initialState.instructions[0].id;
+      const secondInstructionId = initialState.instructions[1].id;
+
+      service.selectInstruction(firstInstructionId);
+      service.selectInstruction(secondInstructionId);
+
+      const updatedState = await firstValueFrom(service.getInstructions());
+      
+      expect(updatedState.selectedInstructionId).toBe(secondInstructionId);
+    });
   });
 
   describe('Instruction Validation', () => {
-    it('should validate instructions', () => {
-      expect(service.validateInstruction({
-        title: 'Valid Title',
-        content: 'Valid Content'
-      })).toBe(true);
+    it('should validate instruction with title and content', () => {
+      const validInstruction = {
+        title: 'Valid Instruction',
+        content: 'Valid content',
+        isActive: true
+      };
 
-      expect(service.validateInstruction({
+      const invalidInstructionNoTitle = {
         title: '',
-        content: ''
-      })).toBe(false);
+        content: 'Some content',
+        isActive: true
+      };
 
-      expect(service.validateInstruction({
-        title: 'Title',
-        content: ''
-      })).toBe(false);
+      const invalidInstructionNoContent = {
+        title: 'Some Title',
+        content: '',
+        isActive: true
+      };
+
+      expect(service.validateInstruction(validInstruction)).toBe(true);
+      expect(service.validateInstruction(invalidInstructionNoTitle)).toBe(false);
+      expect(service.validateInstruction(invalidInstructionNoContent)).toBe(false);
     });
   });
 }); 

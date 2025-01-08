@@ -5,6 +5,10 @@ import os from "os"
 import pWaitFor from "p-wait-for"
 import * as path from "path"
 import * as vscode from "vscode"
+import { injectable, inject } from "inversify"
+import { DIContainer } from "../di/container"
+import { TYPES } from "../di/types"
+import { RxService } from "../di/rxjs-services"
 import { buildApiHandler } from "../../api"
 import { downloadTask } from "../../integrations/misc/export-markdown"
 import { openFile, openImage } from "../../integrations/misc/open-file"
@@ -70,6 +74,7 @@ export const GlobalFileNames = {
 	clineRules: ".clinerules",
 }
 
+@injectable()
 export class ClineProvider implements vscode.WebviewViewProvider {
 	public static readonly sideBarId = "claude-dev.SidebarProvider" // used in package.json as the view's id. This value cannot be changed due to how vscode caches views based on their id, and updating the id would break existing instances of the extension.
 	public static readonly tabPanelId = "claude-dev.TabPanelProvider"
@@ -81,14 +86,19 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	mcpHub?: McpHub
 	private latestAnnouncementId = "jan-6-2025" // update to some unique identifier when we add a new announcement
 
-	constructor(
-		readonly context: vscode.ExtensionContext,
-		private readonly outputChannel: vscode.OutputChannel,
-	) {
+	@inject(TYPES.ExtensionContext) readonly context: vscode.ExtensionContext
+	@inject(TYPES.OutputChannel) private readonly outputChannel: vscode.OutputChannel
+
+	constructor() {
 		this.outputChannel.appendLine("ClineProvider instantiated")
 		ClineProvider.activeInstances.add(this)
+		
+		// Use DI container to manage dependencies
 		this.workspaceTracker = new WorkspaceTracker(this)
+		DIContainer.bind(TYPES.WorkspaceTracker, () => this.workspaceTracker)
+		
 		this.mcpHub = new McpHub(this)
+		DIContainer.bind(TYPES.McpHub, () => this.mcpHub)
 	}
 
 	/*
@@ -281,9 +291,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
                 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} https:; script-src 'nonce-${nonce}';">
 		- 'unsafe-inline' is required for styles due to vscode-webview-toolkit's dynamic style injection
 		- since we pass base64 images to the webview, we need to specify img-src ${webview.cspSource} data:;
-
-        in meta tag we add nonce attribute: A cryptographic nonce (only used once) to allow scripts. The server must generate a unique nonce value each time it transmits a policy. It is critical to provide a nonce that cannot be guessed as bypassing a resource's policy is otherwise trivial.
-        */
+		*/
 		const nonce = getNonce()
 
 		// Tip: Install the es6-string-html VS Code extension to enable code highlighting below

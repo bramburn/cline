@@ -1,5 +1,6 @@
 import { injectable } from 'inversify';
 import { BehaviorSubject, Observable } from 'rxjs';
+import { IAPIConfigurationService } from '../types/services/IAPIConfigurationService';
 
 export interface ModelCapabilities {
   name: string;
@@ -17,7 +18,7 @@ export interface APIConfiguration {
 }
 
 @injectable()
-export class APIConfigurationService {
+export class APIConfigurationService implements IAPIConfigurationService {
   private configSubject = new BehaviorSubject<APIConfiguration>({
     selectedModel: 'gpt-3.5-turbo',
     models: [
@@ -55,7 +56,6 @@ export class APIConfigurationService {
   }
 
   public validateAPIKey(apiKey: string): boolean {
-    // Basic validation - can be expanded
     return apiKey.trim().length > 10;
   }
 } 

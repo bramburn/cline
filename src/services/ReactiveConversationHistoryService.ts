@@ -1,185 +1,217 @@
+import { injectable } from 'inversify';
 import { BehaviorSubject, Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
-import {
-  ConversationMessage,
-  ConversationState,
-  MessageValidationRules,
-  ValidationError,
-  ConversationError
-} from '../types/conversation';
+import { Anthropic } from '@anthropic-ai/sdk';
+import { 
+  IReactiveConversationHistoryService, 
+  ReactiveConversationState, 
+  ConversationHistoryResult, 
+  ConversationHistoryError 
+} from '../types/services/IReactiveConversationHistoryService';
 
-export class ReactiveConversationHistoryService {
-  private state = new BehaviorSubject<ConversationState>({
-    messages: [],
-    isProcessing: false
-  });
+@injectable()
+export class ReactiveConversationHistoryService implements IReactiveConversationHistoryService {
+  private _state: BehaviorSubject<ReactiveConversationState>;
+  private _lastError: ConversationHistoryError | null = null;
 
-  private readonly maxMessages = 100;
-  private readonly validationRules: MessageValidationRules = {
-    maxContentLength: 10000,
-    requiredFields: ['id', 'content', 'type', 'timestamp'],
-    allowedTypes: ['user', 'assistant']
-  };
-
-  constructor() {}
-
-  public getMessages(): Observable<ConversationMessage[]> {
-    return this.state.pipe(
-      map(state => state.messages)
-    );
+  constructor() {
+    this._state = new BehaviorSubject<ReactiveConversationState>({
+      messages: [],
+      lastUpdated: Date.now(),
+      metadata: {}
+    });
   }
 
-  public getState(): Observable<ConversationState> {
-    return this.state.asObservable();
+  getCurrentState(): ReactiveConversationState {
+    return this._state.getValue();
   }
 
-  private validateMessage(message: ConversationMessage): void {
-    // Check required fields
-    for (const field of this.validationRules.requiredFields) {
-      if (!(field in message)) {
-        throw new ValidationError(`Missing required field: ${field}`);
-      }
-    }
-
-    // Validate content length
-    if (message.content.length > this.validationRules.maxContentLength) {
-      throw new ValidationError(`Content exceeds maximum length of ${this.validationRules.maxContentLength}`);
-    }
-
-    // Validate message type
-    if (!this.validationRules.allowedTypes.includes(message.type)) {
-      throw new ValidationError(`Invalid message type: ${message.type}`);
-    }
+  getStateUpdates(): Observable<ReactiveConversationState> {
+    return this._state.asObservable();
   }
 
-  public async addMessage(message: ConversationMessage): Promise<void> {
+  addMessage(message: Anthropic.MessageParam): ConversationHistoryResult<void> {
     try {
-      this.setProcessing(true);
-      this.validateMessage(message);
-
-      const currentState = this.state.value;
-      const messages = [...currentState.messages, message];
+      const currentState = this.getCurrentState();
+      const updatedMessages = [...currentState.messages, message];
       
-      // Handle overflow
-      if (messages.length > this.maxMessages) {
-        messages.shift();
-      }
-
-      this.updateState({
-        messages,
-        metadata: {
-          lastUpdated: Date.now(),
-          messageCount: messages.length
-        }
+      this._state.next({
+        ...currentState,
+        messages: updatedMessages,
+        lastUpdated: Date.now()
       });
+
+      return { success: true, data: undefined };
     } catch (error) {
-      this.handleError(error);
-      throw error;
-    } finally {
-      this.setProcessing(false);
+      const historyError: ConversationHistoryError = {
+        code: 'INVALID_STATE',
+        message: 'Failed to add message',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
     }
   }
 
-  public async updateMessage(id: string, content: string): Promise<void> {
+  updateLastMessage(updates: Partial<Anthropic.MessageParam>): ConversationHistoryResult<void> {
     try {
-      this.setProcessing(true);
-      const currentState = this.state.value;
-      const messageIndex = currentState.messages.findIndex(msg => msg.id === id);
-
-      if (messageIndex === -1) {
-        throw new ConversationError(`Message with id ${id} not found`);
+      const currentState = this.getCurrentState();
+      if (currentState.messages.length === 0) {
+        throw new Error('No messages to update');
       }
 
-      const updatedMessage = {
-        ...currentState.messages[messageIndex],
-        content
+      const updatedMessages = [...currentState.messages];
+      updatedMessages[updatedMessages.length - 1] = {
+        ...updatedMessages[updatedMessages.length - 1],
+        ...updates
       };
 
-      this.validateMessage(updatedMessage);
-
-      const messages = [...currentState.messages];
-      messages[messageIndex] = updatedMessage;
-
-      this.updateState({
-        messages,
-        metadata: {
-          lastUpdated: Date.now(),
-          messageCount: messages.length
-        }
+      this._state.next({
+        ...currentState,
+        messages: updatedMessages,
+        lastUpdated: Date.now()
       });
+
+      return { success: true, data: undefined };
     } catch (error) {
-      this.handleError(error);
-      throw error;
-    } finally {
-      this.setProcessing(false);
+      const historyError: ConversationHistoryError = {
+        code: 'INVALID_STATE',
+        message: 'Failed to update last message',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
     }
   }
 
-  public async deleteMessage(id: string): Promise<void> {
+  removeLastMessage(): ConversationHistoryResult<void> {
     try {
-      this.setProcessing(true);
-      const currentState = this.state.value;
-      const messages = currentState.messages.filter(msg => msg.id !== id);
-
-      if (messages.length === currentState.messages.length) {
-        throw new ConversationError(`Message with id ${id} not found`);
+      const currentState = this.getCurrentState();
+      if (currentState.messages.length === 0) {
+        throw new Error('No messages to remove');
       }
 
-      this.updateState({
-        messages,
-        metadata: {
-          lastUpdated: Date.now(),
-          messageCount: messages.length
-        }
+      const updatedMessages = currentState.messages.slice(0, -1);
+
+      this._state.next({
+        ...currentState,
+        messages: updatedMessages,
+        lastUpdated: Date.now()
       });
+
+      return { success: true, data: undefined };
     } catch (error) {
-      this.handleError(error);
-      throw error;
-    } finally {
-      this.setProcessing(false);
+      const historyError: ConversationHistoryError = {
+        code: 'INVALID_STATE',
+        message: 'Failed to remove last message',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
     }
   }
 
-  public async clearHistory(): Promise<void> {
+  saveCurrentState(): ConversationHistoryResult<string> {
     try {
-      this.setProcessing(true);
-      this.updateState({
-        messages: [],
-        metadata: {
-          lastUpdated: Date.now(),
-          messageCount: 0
-        }
-      });
+      const currentState = this.getCurrentState();
+      // In a real implementation, this would persist to a database or file
+      const conversationId = `conversation_${Date.now()}`;
+      
+      // Simulating persistence
+      localStorage.setItem(conversationId, JSON.stringify(currentState));
+
+      return { success: true, data: conversationId };
     } catch (error) {
-      this.handleError(error);
-      throw error;
-    } finally {
-      this.setProcessing(false);
+      const historyError: ConversationHistoryError = {
+        code: 'PERSISTENCE_ERROR',
+        message: 'Failed to save conversation state',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
     }
   }
 
-  private setProcessing(isProcessing: boolean): void {
-    const currentState = this.state.value;
-    this.state.next({
-      ...currentState,
-      isProcessing
-    });
+  loadState(conversationId: string): ConversationHistoryResult<void> {
+    try {
+      const savedStateJson = localStorage.getItem(conversationId);
+      if (!savedStateJson) {
+        throw new Error('Conversation not found');
+      }
+
+      const savedState: ReactiveConversationState = JSON.parse(savedStateJson);
+      
+      this._state.next({
+        ...savedState,
+        lastUpdated: Date.now()
+      });
+
+      return { success: true, data: undefined };
+    } catch (error) {
+      const historyError: ConversationHistoryError = {
+        code: 'INITIALIZATION_ERROR',
+        message: 'Failed to load conversation state',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
+    }
   }
 
-  private handleError(error: unknown): void {
-    const currentState = this.state.value;
-    this.state.next({
-      ...currentState,
-      error: error instanceof Error ? error : new Error(String(error))
-    });
+  updateMetadata(metadata: Record<string, any>): ConversationHistoryResult<void> {
+    try {
+      const currentState = this.getCurrentState();
+
+      this._state.next({
+        ...currentState,
+        metadata: { ...currentState.metadata, ...metadata },
+        lastUpdated: Date.now()
+      });
+
+      return { success: true, data: undefined };
+    } catch (error) {
+      const historyError: ConversationHistoryError = {
+        code: 'INVALID_STATE',
+        message: 'Failed to update metadata',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
+    }
   }
 
-  private updateState(partialState: Partial<ConversationState>): void {
-    const currentState = this.state.value;
-    this.state.next({
-      ...currentState,
-      ...partialState,
-      error: undefined // Clear any previous errors
-    });
+  setCurrentTaskDir(taskDir: string): ConversationHistoryResult<void> {
+    try {
+      const currentState = this.getCurrentState();
+
+      this._state.next({
+        ...currentState,
+        currentTaskDir: taskDir,
+        lastUpdated: Date.now()
+      });
+
+      return { success: true, data: undefined };
+    } catch (error) {
+      const historyError: ConversationHistoryError = {
+        code: 'INVALID_STATE',
+        message: 'Failed to set current task directory',
+        originalError: error instanceof Error ? error : undefined
+      };
+      this._lastError = historyError;
+      return { success: false, error: historyError };
+    }
+  }
+
+  getLastError(): ConversationHistoryError | null {
+    return this._lastError;
+  }
+
+  filterMessages(predicate: (message: Anthropic.MessageParam) => boolean): Anthropic.MessageParam[] {
+    const currentState = this.getCurrentState();
+    return currentState.messages.filter(predicate);
+  }
+
+  mapMessages<T>(mapper: (message: Anthropic.MessageParam) => T): T[] {
+    const currentState = this.getCurrentState();
+    return currentState.messages.map(mapper);
   }
 } 

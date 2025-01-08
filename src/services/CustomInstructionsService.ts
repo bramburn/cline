@@ -1,5 +1,6 @@
 import { injectable } from 'inversify';
 import { BehaviorSubject, Observable } from 'rxjs';
+import { ICustomInstructionsService } from '../types/services/ICustomInstructionsService';
 
 export interface CustomInstruction {
   id: string;
@@ -16,7 +17,7 @@ export interface CustomInstructionsState {
 }
 
 @injectable()
-export class CustomInstructionsService {
+export class CustomInstructionsService implements ICustomInstructionsService {
   private instructionsSubject = new BehaviorSubject<CustomInstructionsState>({
     instructions: []
   });
@@ -79,7 +80,6 @@ export class CustomInstructionsService {
   }
 
   public validateInstruction(instruction: Partial<CustomInstruction>): boolean {
-    // Basic validation
     return !!(instruction.title && instruction.title.trim().length > 0 && 
               instruction.content && instruction.content.trim().length > 0);
   }

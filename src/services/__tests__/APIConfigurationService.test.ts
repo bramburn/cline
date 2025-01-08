@@ -15,6 +15,20 @@ describe('APIConfigurationService', () => {
       expect(config.selectedModel).toBe('gpt-3.5-turbo');
       expect(config.models.length).toBeGreaterThan(0);
     });
+
+    it('should have default models with correct properties', async () => {
+      const config = await firstValueFrom(service.getConfiguration());
+      const gpt35Model = config.models.find(m => m.name === 'gpt-3.5-turbo');
+      const gpt4Model = config.models.find(m => m.name === 'gpt-4');
+
+      expect(gpt35Model).toBeDefined();
+      expect(gpt4Model).toBeDefined();
+      
+      expect(gpt35Model?.contextWindow).toBe(4096);
+      expect(gpt4Model?.contextWindow).toBe(8192);
+      expect(gpt35Model?.supportsStreaming).toBe(true);
+      expect(gpt4Model?.supportsStreaming).toBe(true);
+    });
   });
 
   describe('Configuration Updates', () => {
@@ -46,6 +60,8 @@ describe('APIConfigurationService', () => {
       expect(capabilities).toBeDefined();
       expect(capabilities?.contextWindow).toBe(4096);
       expect(capabilities?.supportsStreaming).toBe(true);
+      expect(capabilities?.supportedFeatures).toContain('text-completion');
+      expect(capabilities?.supportedFeatures).toContain('chat');
     });
 
     it('should return undefined for unknown model', () => {
@@ -56,7 +72,7 @@ describe('APIConfigurationService', () => {
   });
 
   describe('API Key Validation', () => {
-    it('should validate API key', () => {
+    it('should validate API key length', () => {
       expect(service.validateAPIKey('short')).toBe(false);
       expect(service.validateAPIKey('valid-api-key-123456')).toBe(true);
     });
