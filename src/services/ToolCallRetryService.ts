@@ -1,7 +1,14 @@
-export interface RetryConfig {
-  maxRetries: number;
-  retryDelay: number;
+import { RetryStrategy } from '../types/ToolCallOptimization';
+
+export interface RetryStrategy {
+  maxAttempts: number;
+  delayMs?: number;
   shouldRetry?: (error: Error) => boolean;
+}
+
+export interface RetryConfig extends RetryStrategy {
+  maxRetries?: number; // Add optional maxRetries for backwards compatibility
+  // No additional properties needed
 }
 
 export interface RetryHistory {
@@ -20,10 +27,15 @@ export class ToolCallRetryService {
     operation: () => Promise<T>,
     config: RetryConfig
   ): Promise<T> {
+    // Use maxRetries if provided, otherwise use maxAttempts
+    const maxAttempts = config.maxRetries !== undefined 
+      ? config.maxRetries + 1 
+      : config.maxAttempts;
+    
     let attempts = 0;
     let lastError: Error | undefined;
 
-    while (attempts < config.maxRetries) {
+    while (attempts < maxAttempts) {
       try {
         const result = await operation();
         this.updateRetryHistory(toolId, attempts, undefined);
@@ -37,12 +49,12 @@ export class ToolCallRetryService {
           throw lastError;
         }
 
-        if (attempts === config.maxRetries) {
+        if (attempts === maxAttempts) {
           this.updateRetryHistory(toolId, attempts, lastError);
           throw lastError;
         }
 
-        await new Promise(resolve => setTimeout(resolve, config.retryDelay));
+        await new Promise(resolve => setTimeout(resolve, config.delayMs || 1000));
       }
     }
 

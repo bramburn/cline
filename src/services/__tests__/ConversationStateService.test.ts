@@ -1,5 +1,6 @@
 import { ConversationStateService } from '../ConversationStateService';
 import { ClineMessage } from '../../shared/ExtensionMessage';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 describe('ConversationStateService', () => {
   let service: ConversationStateService;
@@ -88,7 +89,7 @@ describe('ConversationStateService', () => {
 
   describe('subscribe', () => {
     it('should notify listeners of state changes', () => {
-      const listener = jest.fn();
+      const listener = vi.fn();
       const unsubscribe = service.subscribe(listener);
       
       const message: ClineMessage = { type: 'say', text: 'test', ts: 123 };
@@ -104,4 +105,4 @@ describe('ConversationStateService', () => {
       expect(listener).toHaveBeenCalledTimes(1);
     });
   });
-}); 
+});

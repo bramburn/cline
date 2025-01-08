@@ -194,7 +194,11 @@ export class ToolCallPatternAnalyzer {
     };
   }
 
-  public clearAnalysis(): void {
+  public clearPatterns(): void {
     this.patterns = [];
+  }
+
+  public getPatterns(): ToolCallPattern[] {
+    return this.patterns;
   }
 }

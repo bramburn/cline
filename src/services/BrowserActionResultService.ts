@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, LazyServiceIdentifier } from 'inversify';
 import { BrowserActionResult } from '../shared/ExtensionMessage';
 import { Logger } from '../utils/logger';
 import * as fs from 'fs';
@@ -9,7 +9,7 @@ export class BrowserActionResultService {
     private readonly screenshotDir: string = 'screenshots';
 
     constructor(
-        @inject(Logger) private logger: Logger
+        @inject(new LazyServiceIdentifier(() => Logger)) private logger: Logger
     ) {
         this.ensureScreenshotDirectory();
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { StreamController } from '../StreamController';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, filter } from 'rxjs';
 
 describe('StreamController', () => {
   let controller: StreamController;
@@ -9,9 +9,18 @@ describe('StreamController', () => {
     controller = new StreamController();
   });
 
+  it('should initialize without errors', () => {
+    expect(controller).toBeDefined();
+  });
+
   describe('progress updates', () => {
     it('should update progress correctly', async () => {
-      const progressPromise = firstValueFrom(controller.getProgressUpdates());
+      const progressPromise = firstValueFrom(
+        controller.getProgressUpdates().pipe(
+          filter(progress => progress.progress === 50)
+        )
+      );
+      
       controller.updateProgress(50);
       const progress = await progressPromise;
 
@@ -31,7 +40,11 @@ describe('StreamController', () => {
 
   describe('state management', () => {
     it('should handle pause correctly', async () => {
-      const progressPromise = firstValueFrom(controller.getProgressUpdates());
+      const progressPromise = firstValueFrom(
+        controller.getProgressUpdates().pipe(
+          filter(progress => progress.status === 'paused')
+        )
+      );
       controller.pause();
       const progress = await progressPromise;
       expect(progress.status).toBe('paused');
@@ -45,7 +58,11 @@ describe('StreamController', () => {
     });
 
     it('should handle stop correctly', async () => {
-      const progressPromise = firstValueFrom(controller.getProgressUpdates());
+      const progressPromise = firstValueFrom(
+        controller.getProgressUpdates().pipe(
+          filter(progress => progress.status === 'stopped')
+        )
+      );
       controller.stop();
       const progress = await progressPromise;
       expect(progress.status).toBe('stopped');
@@ -54,7 +71,11 @@ describe('StreamController', () => {
 
     it('should handle error correctly', async () => {
       const testError = new Error('Test error');
-      const progressPromise = firstValueFrom(controller.getProgressUpdates());
+      const progressPromise = firstValueFrom(
+        controller.getProgressUpdates().pipe(
+          filter(progress => progress.status === 'stopped' && progress.error === testError)
+        )
+      );
       controller.error(testError);
       const progress = await progressPromise;
       expect(progress.status).toBe('stopped');
@@ -74,4 +95,4 @@ describe('StreamController', () => {
       expect(progress.metrics?.averageProcessingTime).toBeGreaterThanOrEqual(0);
     });
   });
-}); 
+});

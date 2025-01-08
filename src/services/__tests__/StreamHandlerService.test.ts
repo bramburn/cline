@@ -1,15 +1,50 @@
+import { describe, it, expect, beforeEach } from 'vitest';
 import { StreamHandlerService } from '../StreamHandlerService';
 import { StreamController } from '../StreamController';
+import { vi } from 'vitest';
 
-jest.mock('../StreamController');
+vi.mock('../StreamController');
 
 describe('StreamHandlerService', () => {
   let service: StreamHandlerService;
-  let mockStreamController: jest.Mocked<StreamController>;
+  let mockStreamController: ReturnType<typeof vi.mocked<StreamController>>;
 
   beforeEach(() => {
-    mockStreamController = new StreamController() as jest.Mocked<StreamController>;
+    mockStreamController = vi.mocked(new StreamController());
     service = new StreamHandlerService(mockStreamController);
+  });
+
+  it('should initialize without errors', () => {
+    expect(service).toBeDefined();
+  });
+
+  it('should handle stream start', () => {
+    const streamId = service.startStream();
+    expect(streamId).toBeDefined();
+    expect(typeof streamId).toBe('string');
+  });
+
+  it('should update stream progress', () => {
+    const streamId = service.startStream();
+    service.updateStreamProgress(streamId, 50);
+    const streamState = service.getStreamState(streamId);
+    expect(streamState?.progress).toBe(50);
+  });
+
+  it('should complete a stream', () => {
+    const streamId = service.startStream();
+    service.completeStream(streamId);
+    const streamState = service.getStreamState(streamId);
+    expect(streamState?.status).toBe('completed');
+  });
+
+  it('should handle stream errors', () => {
+    const streamId = service.startStream();
+    const errorMessage = 'Test error';
+    service.errorStream(streamId, errorMessage);
+    const streamState = service.getStreamState(streamId);
+    expect(streamState?.status).toBe('error');
+    expect(streamState?.errorMessage).toBe(errorMessage);
   });
 
   it('should process JSON stream chunks correctly', async () => {
@@ -93,4 +128,4 @@ describe('StreamHandlerService', () => {
       }
     });
   }
-}); 
+});

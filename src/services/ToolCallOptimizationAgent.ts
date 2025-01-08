@@ -7,10 +7,7 @@ export interface OptimizationConfig {
   modifyParameters?: (parameters: Record<string, any>, error: Error) => Record<string, any>;
 }
 
-export interface ErrorReport {
-  error: Error;
-  timestamp: number;
-}
+import { ErrorReport } from '../types/ToolCallOptimization';
 
 import { ToolCallPattern } from './ToolCallPatternAnalyzer';
 import { ToolCallRetryService } from './ToolCallRetryService';

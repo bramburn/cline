@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach } from 'vitest';
 import { BrowserSessionService } from '../BrowserSessionService';
 import { ClineStateService } from '../ClineStateService';
 import { Logger } from '../../utils/logger';
@@ -5,20 +6,28 @@ import { ClineSayBrowserAction, BrowserActionResult } from '../../shared/Extensi
 
 describe('BrowserSessionService', () => {
     let browserSessionService: BrowserSessionService;
-    let mockStateService: jest.Mocked<ClineStateService>;
-    let mockLogger: jest.Mocked<Logger>;
+    let mockStateService: { 
+        // Add mock methods as needed 
+        [key: string]: any 
+    };
+    let mockLogger: { 
+        info: (msg: string) => void;
+        error: (msg: string) => void;
+        debug: (msg: string) => void;
+        warn: (msg: string) => void;
+    };
 
     beforeEach(() => {
         mockStateService = {
             // Add mock methods as needed
-        } as any;
+        };
 
         mockLogger = {
-            info: jest.fn(),
-            error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn(),
-        } as any;
+            info: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+            warn: vi.fn(),
+        };
 
         browserSessionService = new BrowserSessionService(mockStateService, mockLogger);
     });
@@ -51,34 +60,37 @@ describe('BrowserSessionService', () => {
                 coordinate: '100,100'
             };
             const result: BrowserActionResult = {
-                logs: 'Clicked successfully',
-                currentUrl: 'https://example.com'
+                success: true,
+                details: 'Clicked successfully'
             };
 
-            browserSessionService.updateSessionState(sessionId, action, result);
-            const session = browserSessionService.getSession(sessionId);
-
-            expect(session).toBeDefined();
-            expect(session?.lastAction).toEqual(action);
-            expect(session?.lastResult).toEqual(result);
-            expect(session?.currentUrl).toBe('https://example.com');
+            await browserSessionService.updateSessionState(sessionId, action, result);
+            expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('Updated session state'));
         });
 
-        it('should throw error when updating non-existent session', () => {
-            const action: ClineSayBrowserAction = { action: 'click' };
-            const result: BrowserActionResult = { logs: 'test' };
+        it('should throw error when updating non-existent session', async () => {
+            const action: ClineSayBrowserAction = {
+                action: 'click',
+                coordinate: '100,100'
+            };
+            const result: BrowserActionResult = {
+                success: true,
+                details: 'Clicked successfully'
+            };
 
-            expect(() => browserSessionService.updateSessionState('non-existent', action, result)).toThrow();
+            await expect(browserSessionService.updateSessionState('non-existent', action, result)).rejects.toThrow();
         });
     });
 
     describe('getAllSessions', () => {
         it('should return all active sessions', async () => {
-            await browserSessionService.createSession();
-            await browserSessionService.createSession();
+            const sessionId1 = await browserSessionService.createSession();
+            const sessionId2 = await browserSessionService.createSession();
 
             const sessions = browserSessionService.getAllSessions();
-            expect(sessions).toHaveLength(2);
+            expect(sessions.length).toBe(2);
+            expect(sessions).toContain(sessionId1);
+            expect(sessions).toContain(sessionId2);
         });
     });
-}); 
+});

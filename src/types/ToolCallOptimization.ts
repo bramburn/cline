@@ -2,7 +2,7 @@ import { ToolUseName } from '../core/assistant-message';
 
 export interface ToolCallPattern {
   toolName: ToolUseName;
-  parameters: Record<string, string>;
+  parameters: Record<string, any>;
   outcome: ToolCallOutcome;
   timestamp: number;
   retryCount: number;
@@ -58,4 +58,5 @@ export interface PatternAnalysis {
     count: number;
   }>;
   suggestions: ToolCallSuggestion[];
-} 
+  successfulPatterns: string[];
+}

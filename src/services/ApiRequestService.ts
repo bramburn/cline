@@ -35,7 +35,9 @@ export class ApiRequestService {
 
   public async performRequest<T = any>(config: ApiRequestConfig): Promise<ApiResponse<T>> {
     const requestId = uuidv4();
-    this.metrics.startRequest(requestId, config.url);
+    if (this.metrics) {
+      this.metrics.startRequest(requestId, config.url);
+    }
     
     try {
       this.streamController.updateProgress(0);
@@ -184,4 +186,4 @@ export class ApiRequestService {
     }
     return ErrorCategory.UNKNOWN;
   }
-} 
+}

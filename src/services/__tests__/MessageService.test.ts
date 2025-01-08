@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { firstValueFrom } from 'rxjs';
+import { of, throwError } from 'rxjs';
+import { tap } from 'rxjs/operators';
 import { MessageService } from '../MessageService';
 import { MessageProcessingPipeline } from '../MessageProcessingPipeline';
 import { TaskManagementService } from '../TaskManagementService';
@@ -47,7 +49,7 @@ describe('MessageService', () => {
       };
 
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => resolve(processResult));
+        return of(processResult);
       });
 
       const result = await firstValueFrom(messageService.sendMessage(message));
@@ -57,11 +59,14 @@ describe('MessageService', () => {
     });
 
     it('should handle processing errors', async () => {
+      console.log('Test: should handle processing errors');
       const message = createValidMessage();
+      console.log('Input message:', message);
       const error = new Error('Processing failed');
+      console.log('Error created:', error.message);
       
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise((_, reject) => reject(error));
+        return throwError(() => error);
       });
 
       const result = await firstValueFrom(messageService.sendMessage(message));
@@ -75,7 +80,7 @@ describe('MessageService', () => {
       
       vi.mocked(taskManagementService.startTask).mockReturnValue(taskId);
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => resolve({ success: true, data: message }));
+        return of({ success: true, data: message });
       });
 
       await firstValueFrom(messageService.sendMessage(message));
@@ -90,7 +95,7 @@ describe('MessageService', () => {
       const message = createValidMessage();
       
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => resolve({ success: true, data: message }));
+        return of({ success: true, data: message });
       });
 
       await firstValueFrom(messageService.sendMessage(message));
@@ -109,10 +114,9 @@ describe('MessageService', () => {
       });
 
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => {
-          expect(isProcessing).toBe(true);
-          resolve({ success: true, data: message });
-        });
+        return of({ success: true, data: message }).pipe(
+          tap(() => expect(isProcessing).toBe(true))
+        );
       });
 
       await firstValueFrom(messageService.sendMessage(message));
@@ -126,7 +130,7 @@ describe('MessageService', () => {
       const newContent = 'Updated content';
       
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => resolve({ success: true, data: message }));
+        return of({ success: true, data: message });
       });
 
       await firstValueFrom(messageService.sendMessage(message));
@@ -144,10 +148,10 @@ describe('MessageService', () => {
       const currentTaskId = '789';
       const newTaskId = '101112';
       
-      vi.mocked(taskManagementService.getCurrentTask).mockReturnValue({ id: currentTaskId });
+vi.mocked(taskManagementService.getCurrentTask).mockReturnValue({ id: currentTaskId, status: 'active', startTime: Date.now(), metrics: { tokenCount: 0, cost: 0, duration: 0 } });
       vi.mocked(taskManagementService.startTask).mockReturnValue(newTaskId);
       vi.mocked(processingPipeline.processMessage).mockImplementation(() => {
-        return new Promise(resolve => resolve({ success: true, data: message }));
+        return of({ success: true, data: message });
       });
 
       await firstValueFrom(messageService.sendMessage(message));
@@ -163,4 +167,4 @@ describe('MessageService', () => {
       expect(() => firstValueFrom(messageService.getState())).rejects.toThrow();
     });
   });
-}); 
+});

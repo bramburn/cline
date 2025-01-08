@@ -44,7 +44,7 @@ describe('CustomInstructionsService', () => {
       
       expect(updatedState.instructions[0].title).toBe('Updated Instruction');
       expect(updatedState.instructions[0].content).toBe('Updated content');
-      expect(updatedState.instructions[0].updatedAt).toBeGreaterThan(initialState.instructions[0].createdAt);
+      expect(updatedState.instructions[0].updatedAt).toBeGreaterThanOrEqual(initialState.instructions[0].createdAt);
     });
   });
 

@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, LazyServiceIdentifier } from 'inversify';
 import { ClineStateService } from './ClineStateService';
 import { BrowserActionResult, ClineSayBrowserAction } from '../shared/ExtensionMessage';
 import { Logger } from '../utils/logger';
@@ -16,8 +16,8 @@ export class BrowserSessionService {
     private activeSessions: Map<string, BrowserSession> = new Map();
 
     constructor(
-        @inject(ClineStateService) private stateService: ClineStateService,
-        @inject(Logger) private logger: Logger
+        @inject(new LazyServiceIdentifier(() => ClineStateService)) private stateService: ClineStateService,
+        @inject(new LazyServiceIdentifier(() => Logger)) private logger: Logger
     ) {}
 
     public async createSession(): Promise<string> {
@@ -65,4 +65,4 @@ export class BrowserSessionService {
     public getAllSessions(): BrowserSession[] {
         return Array.from(this.activeSessions.values());
     }
-} 
+}
