@@ -1,13 +1,8 @@
-import { ErrorCategory } from '../../types';
-
-export interface ToolCallOutcome {
-  success: boolean;
-  duration: number;
-  errorMessage?: string;
-}
+import { ErrorCategory, ToolCallOutcome } from '../../types';
 
 export interface ToolCallPattern {
-  toolName: string;
+  toolId: string;
+  toolName: 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion';
   parameters: Record<string, any>;
   outcome: ToolCallOutcome;
   timestamp: Date;
@@ -16,6 +11,7 @@ export interface ToolCallPattern {
 }
 
 export const createMockToolCallPattern = (overrides: Partial<ToolCallPattern> = {}): ToolCallPattern => ({
+  toolId: 'mock-tool',
   toolName: 'read_file',
   parameters: { path: './mock-file.txt' },
   outcome: {

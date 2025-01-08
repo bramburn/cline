@@ -4,31 +4,42 @@ import { StreamController } from '../StreamController';
 import { NotificationService } from '../NotificationService';
 import { ErrorCategory } from '../../types/ErrorReporting';
 
+// Explicitly mock dependencies
+vi.mock('../StreamController', () => ({
+  StreamController: vi.fn().mockImplementation(() => ({
+    error: vi.fn(),
+    updateProgress: vi.fn(),
+  }))
+}));
+
+vi.mock('../NotificationService', () => ({
+  NotificationService: vi.fn().mockImplementation(() => ({
+    addErrorNotification: vi.fn(),
+  }))
+}));
+
 // Import our new mocks
 import { 
   mockStreamChunk, 
   mockStreamOptions, 
-  mockReadableStream,
-  mockStreamHandlerService 
+  mockReadableStream 
 } from '../__mocks__/StreamHandlerService';
-import { mockStreamController } from '../__mocks__/StreamController';
-import { mockNotificationService } from '../__mocks__/NotificationService';
 
 describe('StreamHandlerService', () => {
   let service: StreamHandlerService;
-  let mockController: StreamController;
-  let mockNotification: NotificationService;
+  let mockStreamController: StreamController;
+  let mockNotificationService: NotificationService;
 
   beforeEach(() => {
     // Reset all mocks
     vi.resetAllMocks();
 
     // Create mocked dependencies
-    mockController = mockStreamController as unknown as StreamController;
-    mockNotification = mockNotificationService as unknown as NotificationService;
+    mockStreamController = new StreamController();
+    mockNotificationService = new NotificationService();
 
     // Initialize the service with mocked dependencies
-    service = new StreamHandlerService(mockController, mockNotification);
+    service = new StreamHandlerService(mockStreamController, mockNotificationService);
   });
 
   it('should process stream chunks correctly', async () => {
@@ -44,16 +55,10 @@ describe('StreamHandlerService', () => {
       })
     } as unknown as ReadableStream<Uint8Array>;
 
-    console.log('Test: Mocked Stream:', mockStream);
-    console.log('Test: Mock Stream Chunk:', mockStreamChunk);
-
     const chunks = [];
     for await (const chunk of service.processStream(mockStream, mockStreamOptions)) {
-      console.log('Test: Received Chunk:', chunk);
       chunks.push(chunk);
     }
-
-    console.log('Test: Processed Chunks:', chunks);
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toEqual({
@@ -86,8 +91,8 @@ describe('StreamHandlerService', () => {
     }).rejects.toThrow('Stream timeout');
 
     // Verify error handling
-    expect(mockController.error).toHaveBeenCalled();
-    expect(mockNotification.addErrorNotification).toHaveBeenCalledWith(
+    expect(mockStreamController.error).toHaveBeenCalled();
+    expect(mockNotificationService.addErrorNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         category: ErrorCategory.TIMEOUT,
         message: expect.stringContaining('Stream Processing Failed')
@@ -96,7 +101,14 @@ describe('StreamHandlerService', () => {
   });
 
   it('should cancel stream successfully', async () => {
-    const mockStream = mockReadableStream as unknown as ReadableStream<Uint8Array>;
+    const mockStream = {
+      getReader: vi.fn().mockReturnValue({
+        read: vi.fn().mockResolvedValue({ done: true }),
+        releaseLock: vi.fn(),
+        cancel: vi.fn()
+      })
+    } as unknown as ReadableStream<Uint8Array>;
+
     await service.cancelStream(mockStream);
 
     // Verify cancellation

@@ -1,5 +1,8 @@
 export const TYPES = {
   NotificationService: Symbol.for('NotificationService'),
+  MessageProcessingPipeline: Symbol.for('MessageProcessingPipeline'),
+  TaskManagementService: Symbol.for('TaskManagementService'),
+  TaskMetricsService: Symbol.for('TaskMetricsService')
 };
 
 export type ErrorCategory = 'TIMEOUT' | 'NETWORK_ERROR';

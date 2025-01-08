@@ -1,19 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-  ToolCallRetryService,
-  ToolCallPatternAnalyzer,
-  ErrorReportingService,
-} from '../__mocks__';
 
-import type {
-  ToolUseName,
-  ErrorReport,
-  PatternAnalysis,
-  ToolCallPattern,
-  RetryHistory,
-  ExecuteToolCallResponse,
-  OptimizationConfig,
-} from '../types/__mocks__';
 import { ToolCallOptimizationAgent } from '../ToolCallOptimizationAgent';
 
 describe('ToolCallOptimizationAgent', () => {

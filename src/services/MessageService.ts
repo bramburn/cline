@@ -4,15 +4,16 @@ import { injectable, inject } from 'inversify';
 import {
   Message,
   MessageState,
-  MessageServiceConfig,
+
   MessageProcessingResult,
   ProcessingError
 } from '../types/MessageTypes';
+import type { MessageServiceConfig } from '../types/MessageTypes';
 import { MessageValidator } from '../validators/MessageValidator';
-import { MessageProcessingPipeline } from './MessageProcessingPipeline';
-import { TaskManagementService } from './TaskManagementService';
-import { TaskMetricsService } from './TaskMetricsService';
-import { IMessageService } from '../types/services/IMessageService';
+import type { MessageProcessingPipeline } from './MessageProcessingPipeline';
+import type { TaskManagementService } from './TaskManagementService';
+import type { TaskMetricsService } from './TaskMetricsService';
+import type { IMessageService } from '../types/services/IMessageService';
 import { TYPES } from '../types';
 
 @injectable()
@@ -22,9 +23,9 @@ export class MessageService implements IMessageService {
   private config: MessageServiceConfig;
 
   constructor(
-    @inject(TYPES.MessageProcessingPipeline) private processingPipeline: MessageProcessingPipeline,
-    @inject(TYPES.TaskManagementService) private taskManagementService: TaskManagementService,
-    @inject(TYPES.TaskMetricsService) private taskMetricsService: TaskMetricsService,
+    @inject(TYPES.MessageProcessingPipeline as any) private processingPipeline: MessageProcessingPipeline,
+    @inject(TYPES.TaskManagementService as any) private taskManagementService: TaskManagementService,
+    @inject(TYPES.TaskMetricsService as any) private taskMetricsService: TaskMetricsService,
     config?: MessageServiceConfig
   ) {
     this.config = {
@@ -65,15 +66,16 @@ export class MessageService implements IMessageService {
 
   private processMessage(message: Message, taskId: string): Observable<MessageProcessingResult> {
     return this.processingPipeline.processMessage(message).pipe(
-      tap(result => {
+      map(result => {
         if (result.success) {
           this.updateState(prevState => ({
             ...prevState,
-            messages: [...prevState.messages, message],
+            messages: [...prevState.messages, { ...message }],
             lastMessageId: message.id
           }));
           this.updateTaskMetrics(taskId, message);
         }
+        return result;
       })
     );
   }
@@ -81,18 +83,19 @@ export class MessageService implements IMessageService {
   private updateTaskMetrics(taskId: string, message: Message): void {
     this.taskMetricsService.initializeMetrics(taskId);
     
-    // Update basic metrics
-    this.taskMetricsService.trackTokens(taskId, this.estimateTokenCount(message));
+    // Always track estimated tokens
+    const estimatedTokens = this.estimateTokenCount(message);
+    this.taskMetricsService.trackTokens(taskId, estimatedTokens);
     
     // Update additional metrics if available
     if (message.metadata?.apiInfo) {
       const { tokensIn, tokensOut, cost, cacheReads, cacheWrites } = message.metadata.apiInfo;
       
-      if (tokensIn) this.taskMetricsService.trackTokens(taskId, tokensIn);
-      if (tokensOut) this.taskMetricsService.trackTokens(taskId, tokensOut);
-      if (cost) this.taskMetricsService.trackCost(taskId, cost);
-      if (cacheReads) this.taskMetricsService.trackCacheOperation(taskId, 'read');
-      if (cacheWrites) this.taskMetricsService.trackCacheOperation(taskId, 'write');
+      if (tokensIn) { this.taskMetricsService.trackTokens(taskId, tokensIn); }
+      if (tokensOut) { this.taskMetricsService.trackTokens(taskId, tokensOut); }
+      if (cost) { this.taskMetricsService.trackCost(taskId, cost); }
+      if (cacheReads) { this.taskMetricsService.trackCacheOperation(taskId, 'read'); }
+      if (cacheWrites) { this.taskMetricsService.trackCacheOperation(taskId, 'write'); }
     }
   }
 
@@ -142,12 +145,11 @@ export class MessageService implements IMessageService {
   }
 
   public updateMessageContent(messageId: string, content: string): void {
-    this.updateState(prevState => {
-      const messages = prevState.messages.map(msg =>
-        msg.id === messageId ? { ...msg, content } : msg
-      );
-      return { ...prevState, messages };
-    });
+    const currentState = this.state.value;
+    const updatedMessages = currentState.messages.map(msg =>
+      msg.id === messageId ? { ...msg, content } : msg
+    );
+    this.state.next({ ...currentState, messages: updatedMessages });
   }
 
   public dispose(): void {

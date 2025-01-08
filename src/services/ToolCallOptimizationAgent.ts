@@ -9,7 +9,7 @@ export interface OptimizationConfig {
 
 import { ErrorReport } from '../types/ToolCallOptimization';
 
-import { ToolCallPattern } from '../types';
+import { ToolCallPattern, ToolCallOutcome } from '../types';
 import { ToolCallRetryService } from './ToolCallRetryService';
 import { ToolCallPatternAnalyzer } from './ToolCallPatternAnalyzer';
 import { ToolCallErrorReporter } from './ToolCallErrorReporter';
@@ -57,34 +57,34 @@ export class ToolCallOptimizationAgent {
       try {
         const result = await operation(parameters);
         console.log(`Tool call ${toolId} executed successfully with result:`, result);
-        this.recordPattern({
-          toolId,
-          toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
-          parameters,
-          outcome: {
-            success: true,
-            duration: Date.now() - startTime
-          },
-          timestamp: Date.now()
-        });
+this.recordPattern({
+  toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
+  parameters,
+  outcome: {
+    success: true,
+    duration: Date.now() - startTime
+  } as ToolCallOutcome,
+  timestamp: new Date(),
+  retryCount: attempts
+});
         return result;
       } catch (error) {
         attempts++;
         lastError = error instanceof Error ? error : new Error(String(error));
 
         console.log(`Tool call ${toolId} failed with error:`, lastError);
-        this.recordPattern({
-          toolId,
-          toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
-          parameters,
-          outcome: {
-            success: false,
-            error: lastError,
-            duration: Date.now() - startTime
-          },
-          timestamp: Date.now(),
-          errorType: lastError.message.includes('regex') ? 'regex' as ErrorCategory : lastError.message.includes('timeout') ? 'timeout' as ErrorCategory : undefined
-        });
+this.recordPattern({
+  toolName: toolId as 'browser_action' | 'execute_command' | 'read_file' | 'write_to_file' | 'replace_in_file' | 'search_files' | 'list_files' | 'list_code_definition_names' | 'use_mcp_tool' | 'access_mcp_resource' | 'ask_followup_question' | 'attempt_completion',
+  parameters,
+  outcome: {
+    success: false,
+    error: lastError,
+    duration: Date.now() - startTime
+  } as ToolCallOutcome,
+  timestamp: new Date(),
+  retryCount: attempts,
+  errorType: lastError.message.includes('regex') ? 'regex' as ErrorCategory : lastError.message.includes('timeout') ? 'timeout' as ErrorCategory : undefined
+});
 
         if (config.shouldRetry && !config.shouldRetry(lastError)) {
           throw lastError;

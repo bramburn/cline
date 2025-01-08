@@ -26,7 +26,8 @@
 		"skipLibCheck": true,
 		"skipDefaultLibCheck": true,
 		"paths": {
-			"src/types/__mocks__/*": ["src/types/__mocks__/*"]
+			"src/types/__mocks__/*": ["src/types/__mocks__/*"],
+			"src/services/__mocks__/*": ["src/services/__mocks__/*"]
 		}
 	},
 	"include": ["src/**/*.ts"],

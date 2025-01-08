@@ -2,6 +2,7 @@ import { BrowserActionService } from '../BrowserActionService';
 import { BrowserSessionService } from '../BrowserSessionService';
 import { Logger } from '../../utils/logger';
 import { ClineSayBrowserAction, BrowserActionResult } from '../../shared/ExtensionMessage';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 describe('BrowserActionService', () => {
     let browserActionService: BrowserActionService;
@@ -10,15 +11,15 @@ describe('BrowserActionService', () => {
 
     beforeEach(() => {
         mockSessionService = {
-            getSession: jest.fn(),
-            updateSessionState: jest.fn(),
+            getSession: vi.fn(),
+            updateSessionState: vi.fn(),
         } as any;
 
         mockLogger = {
-            info: jest.fn(),
-            error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn(),
+            info: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+            warn: vi.fn(),
         } as any;
 
         browserActionService = new BrowserActionService(mockSessionService, mockLogger);

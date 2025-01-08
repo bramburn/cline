@@ -3,14 +3,15 @@ import { Logger } from '../../utils/logger';
 import { BrowserActionResult } from '../../shared/ExtensionMessage';
 import * as fs from 'fs';
 import * as path from 'path';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-jest.mock('fs', () => ({
+vi.mock('fs', () => ({
     promises: {
-        writeFile: jest.fn(),
-        access: jest.fn(),
-        mkdir: jest.fn(),
-        readdir: jest.fn(),
-        unlink: jest.fn(),
+        writeFile: vi.fn(),
+        access: vi.fn(),
+        mkdir: vi.fn(),
+        readdir: vi.fn(),
+        unlink: vi.fn(),
     }
 }));
 
@@ -20,10 +21,10 @@ describe('BrowserActionResultService', () => {
 
     beforeEach(() => {
         mockLogger = {
-            info: jest.fn(),
-            error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn(),
+            info: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+            warn: vi.fn(),
         } as any;
 
         // Reset fs mock implementations

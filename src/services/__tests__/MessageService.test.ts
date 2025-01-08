@@ -81,17 +81,7 @@ describe('MessageService', () => {
       expect(messages[0].id).toBe(message.id);
     });
 
-    it('should handle message content updates', () => {
-      const message = createValidMessage();
-      messageService.sendMessage(message);
-      messageService.updateMessageContent(message.id, 'Updated content');
-
-      const updatedMessages = messageService.getMessages();
-      updatedMessages.subscribe(messages => {
-        const updatedMessage = messages.find(m => m.id === message.id);
-        expect(updatedMessage?.content).toBe('Updated content');
-      });
-    });
+    
   });
 
   describe('Service State Management', () => {
@@ -149,7 +139,7 @@ describe('MessageService', () => {
   });
 
   describe('Token Estimation', () => {
-    it('should estimate token count correctly', () => {
+    it('should estimate token count correctly', async () => {
       const message: Message = {
         id: 'token-test',
         type: 'user' as MessageType,
@@ -159,12 +149,50 @@ describe('MessageService', () => {
 
       const estimatedTokens = Math.ceil(message.content.length / 4);
       
-      messageService.sendMessage(message);
+      await firstValueFrom(messageService.sendMessage(message));
       
       expect(taskMetricsService.trackTokens).toHaveBeenCalledWith(
         expect.any(String), 
         estimatedTokens
       );
+    });
+  });
+
+  describe('Message Updates', () => {
+    it('should correctly update an existing message and maintain other messages', async () => {
+      // Create two initial messages
+      const message1 = {
+        id: 'msg-1',
+        type: 'user' as MessageType,
+        content: 'Original message 1',
+        timestamp: Date.now()
+      };
+      
+      const message2 = {
+        id: 'msg-2',
+        type: 'user' as MessageType,
+        content: 'Original message 2',
+        timestamp: Date.now()
+      };
+
+      // Send both messages
+      await firstValueFrom(messageService.sendMessage(message1));
+      await firstValueFrom(messageService.sendMessage(message2));
+
+      // Update the first message
+      const updatedContent = 'Updated message 1 content';
+      messageService.updateMessageContent(message1.id, updatedContent);
+
+      // Get the current messages state
+      const messages = await firstValueFrom(messageService.getMessages());
+
+      // Verify the update was applied correctly
+      expect(messages).toHaveLength(2);
+      const updatedMessage = messages.find(m => m.id === message1.id);
+      const unchangedMessage = messages.find(m => m.id === message2.id);
+
+      expect(updatedMessage?.content).toBe(updatedContent);
+      expect(unchangedMessage?.content).toBe(message2.content);
     });
   });
 });
