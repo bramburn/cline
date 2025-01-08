@@ -10,7 +10,7 @@ export interface ToolCallPattern {
   toolName: string;
   parameters: Record<string, any>;
   outcome: ToolCallOutcome;
-  timestamp: number;
+  timestamp: Date;
   retryCount: number;
   errorType?: ErrorCategory;
 }
@@ -22,7 +22,7 @@ export const createMockToolCallPattern = (overrides: Partial<ToolCallPattern> = 
     success: true,
     duration: 100,
   },
-  timestamp: Date.now(),
+  timestamp: new Date(),
   retryCount: 0,
   ...overrides
 });
