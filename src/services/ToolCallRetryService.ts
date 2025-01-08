@@ -25,7 +25,12 @@ export class ToolCallRetryService {
   public async executeWithRetry<T>(
     toolId: string,
     operation: () => Promise<T>,
-    config: RetryConfig
+    config: RetryConfig = { 
+      maxAttempts: 3, 
+      delayMs: 1000, 
+      shouldRetry: (error: Error) => 
+        error.message.includes('TIMEOUT') || error.message.includes('NETWORK_ERROR')
+    }
   ): Promise<T> {
     // Use maxRetries if provided, otherwise use maxAttempts
     const maxAttempts = config.maxRetries !== undefined 

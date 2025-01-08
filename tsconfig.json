@@ -22,9 +22,12 @@
 		"rootDir": "./",
 		"baseUrl": "./",
 		"types": ["node", "vscode", "reflect-metadata"],
-		"typeRoots": ["./node_modules/@types", "./node_modules/vscode/vscode.d.ts", "./"],
+		"typeRoots": ["./node_modules/@types", "./node_modules/vscode/vscode.d.ts", "./", "./src/types/__mocks__"],
 		"skipLibCheck": true,
 		"skipDefaultLibCheck": true,
+		"paths": {
+			"src/types/__mocks__/*": ["src/types/__mocks__/*"]
+		}
 	},
 	"include": ["src/**/*.ts"],
 	"exclude": ["node_modules", "dist", "out", "**/*.test.ts", "**/*.spec.ts"]

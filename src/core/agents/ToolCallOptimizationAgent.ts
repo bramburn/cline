@@ -29,16 +29,30 @@ export class ToolCallOptimizationAgent {
       // Execute tool call with retry logic
       const result = await this.retryService.executeWithRetry(
         toolName,
-        parameters,
-        execute
+        () => execute(parameters),
+        { 
+          maxAttempts: 3, 
+          delayMs: 1000, 
+          shouldRetry: (error) => {
+            // Add custom retry logic if needed
+            return error.message.includes('TIMEOUT') || error.message.includes('NETWORK_ERROR');
+          }
+        }
       );
 
       // Get pattern history for analysis
-      const patterns = this.retryService.getRetryHistory();
-      const latestPattern = patterns[patterns.length - 1];
+      const retryHistory = this.retryService.getRetryHistory(toolName);
+      const latestPattern = retryHistory ? {
+        toolName,
+        parameters,
+        attempts: retryHistory.attempts,
+        lastError: retryHistory.lastError
+      } : undefined;
 
       // Update pattern analyzer
-      this.patternAnalyzer.addPattern(latestPattern);
+      if (latestPattern) {
+        this.patternAnalyzer.addPattern(latestPattern);
+      }
 
       // Analyze patterns for this tool
       const analysis = this.patternAnalyzer.analyzePatterns(toolName);
@@ -50,8 +64,18 @@ export class ToolCallOptimizationAgent {
       };
     } catch (error) {
       // Get pattern history for error reporting
-      const patterns = this.retryService.getRetryHistory();
-      const failedPattern = patterns[patterns.length - 1];
+      const retryHistory = this.retryService.getRetryHistory(toolName);
+      const failedPattern = retryHistory ? {
+        toolName,
+        parameters,
+        attempts: retryHistory.attempts,
+        lastError: retryHistory.lastError || error as Error
+      } : {
+        toolName,
+        parameters,
+        attempts: 1,
+        lastError: error as Error
+      };
 
       // Generate error report
       const errorReport = this.errorReporter.generateErrorReport(
@@ -89,4 +113,4 @@ export class ToolCallOptimizationAgent {
     this.patternAnalyzer.clearPatterns();
     this.errorReporter.clearHistory();
   }
-} 
+}

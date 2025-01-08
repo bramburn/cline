@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "lib": ["es2015"],
+    "baseUrl": ".",
+    "paths": {
+      "../types/__mocks__/*": ["../../types/__mocks__/*"]
+    }
+  },
+  "include": ["*.ts"]
+}

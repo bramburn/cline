@@ -32,21 +32,32 @@ export class StreamHandlerService {
     stream: ReadableStream<Uint8Array>,
     options: StreamOptions = {}
   ): AsyncGenerator<StreamChunk> {
+    console.log('[StreamHandlerService] Starting processStream');
+    console.log('[StreamHandlerService] Stream input:', stream);
+    console.log('[StreamHandlerService] Options:', options);
+
     const reader = stream.getReader();
+    console.log('[StreamHandlerService] Reader created:', reader);
+
     const decoder = new TextDecoder();
     let buffer = '';
-    
+
     const maxChunkSize = options.maxChunkSize || this.DEFAULT_CHUNK_SIZE;
     const timeout = options.timeout || this.DEFAULT_TIMEOUT;
 
+    console.log(`[StreamHandlerService] Max Chunk Size: ${maxChunkSize}, Timeout: ${timeout}`);
+
     try {
       while (true) {
+        console.log('[StreamHandlerService] Attempting to read stream');
         const readResult = await Promise.race([
           reader.read(),
-          new Promise<never>((_, reject) => 
+          new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Stream timeout')), timeout)
           )
         ]);
+
+        console.log('[StreamHandlerService] Read Result:', readResult);
 
         if (readResult.done) {
           if (buffer) {
@@ -64,37 +75,49 @@ export class StreamHandlerService {
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.streamController.error(error instanceof Error ? error : new Error(errorMessage));
-      
-      this.notificationService.addErrorNotification({
-        category: error instanceof Error && error.message.includes('timeout') 
-          ? ErrorCategory.TIMEOUT 
-          : ErrorCategory.UNKNOWN,
-        message: `Stream Processing Failed: ${errorMessage}`,
-        context: {
-          toolName: 'browser_action',
-          parameters: {
-            chunkSize: maxChunkSize.toString(),
-            timeout: timeout.toString()
+      console.error('[StreamHandlerService] Stream processing error:', error);
+
+      if (this.notificationService) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.streamController.error(error instanceof Error ? error : new Error(errorMessage));
+
+        this.notificationService.addErrorNotification({
+          category: error instanceof Error && error.message.includes('timeout')
+            ? ErrorCategory.TIMEOUT
+            : ErrorCategory.UNKNOWN,
+          message: `Stream Processing Failed: ${errorMessage}`,
+          context: {
+            toolName: 'browser_action',
+            parameters: {
+              chunkSize: maxChunkSize.toString(),
+              timeout: timeout.toString()
+            },
+            timestamp: Date.now(),
+            retryCount: 0
           },
-          timestamp: Date.now(),
-          retryCount: 0
-        },
-        suggestions: [{
-          toolName: 'browser_action',
-          suggestedParameters: {
-            chunkSize: maxChunkSize.toString(),
-            timeout: (timeout + 10000).toString()
-          },
-          confidence: 0.7,
-          reasoning: 'Increasing timeout and adjusting chunk size might help with stream processing'
-        }]
-      });
-      
+          suggestions: [{
+            toolName: 'browser_action',
+            suggestedParameters: {
+              chunkSize: maxChunkSize.toString(),
+              timeout: (timeout + 10000).toString()
+            },
+            confidence: 0.7,
+            reasoning: 'Increasing timeout and adjusting chunk size might help with stream processing'
+          }]
+        });
+      } else {
+        console.error('NotificationService is undefined');
+      }
+
       throw error;
     } finally {
-      reader.releaseLock();
+      console.log('[StreamHandlerService] Attempting to release reader lock');
+      if (reader && typeof reader.releaseLock === 'function') {
+        reader.releaseLock();
+        console.log('[StreamHandlerService] Reader lock released');
+      } else {
+        console.error('[StreamHandlerService] Reader or releaseLock is undefined');
+      }
     }
   }
 
@@ -107,20 +130,24 @@ export class StreamHandlerService {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.notificationService.addErrorNotification({
-        category: ErrorCategory.INVALID_PARAMETER,
-        message: `Invalid Stream Chunk: ${errorMessage}`,
-        context: {
-          toolName: 'browser_action',
-          parameters: {
-            chunkContent: chunk.slice(0, 100) // Only include first 100 chars for context
+      if (this.notificationService) {
+        this.notificationService.addErrorNotification({
+          category: ErrorCategory.INVALID_PARAMETER,
+          message: `Invalid Stream Chunk: ${errorMessage}`,
+          context: {
+            toolName: 'browser_action',
+            parameters: {
+              chunkContent: chunk.slice(0, 100) // Only include first 100 chars for context
+            },
+            timestamp: Date.now(),
+            retryCount: 0
           },
-          timestamp: Date.now(),
-          retryCount: 0
-        },
-        suggestions: []
-      });
-      
+          suggestions: []
+        });
+      } else {
+        console.error('NotificationService is undefined');
+      }
+
       return {
         type: 'text',
         content: chunk
@@ -134,20 +161,28 @@ export class StreamHandlerService {
       await reader.cancel();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.notificationService.addErrorNotification({
-        category: ErrorCategory.UNKNOWN,
-        message: `Stream Cancellation Failed: ${errorMessage}`,
-        context: {
-          toolName: 'browser_action',
-          parameters: {},
-          timestamp: Date.now(),
-          retryCount: 0
-        },
-        suggestions: []
-      });
+      if (this.notificationService) {
+        this.notificationService.addErrorNotification({
+          category: ErrorCategory.UNKNOWN,
+          message: `Stream Cancellation Failed: ${errorMessage}`,
+          context: {
+            toolName: 'browser_action',
+            parameters: {},
+            timestamp: Date.now(),
+            retryCount: 0
+          },
+          suggestions: []
+        });
+      } else {
+        console.error('NotificationService is undefined');
+      }
       throw error;
     } finally {
-      reader.releaseLock();
+      if (reader && typeof reader.releaseLock === 'function') {
+        reader.releaseLock();
+      } else {
+        console.error('Reader or releaseLock is undefined');
+      }
     }
   }
-} 
+}

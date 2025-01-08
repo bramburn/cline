@@ -9,7 +9,7 @@ export interface OptimizationConfig {
 
 import { ErrorReport } from '../types/ToolCallOptimization';
 
-import { ToolCallPattern } from './ToolCallPatternAnalyzer';
+import { ToolCallPattern } from '../types';
 import { ToolCallRetryService } from './ToolCallRetryService';
 import { ToolCallPatternAnalyzer } from './ToolCallPatternAnalyzer';
 import { ToolCallErrorReporter } from './ToolCallErrorReporter';

@@ -11,36 +11,37 @@ let mockDIContainer: Container | null = null
 // Setup before each test
 beforeEach(() => {
   try {
-    // Create a fresh mock DI container for each test
-    mockDIContainer = createMockDIContainer()
+    // Ensure a fresh mock container is created for each test
+    mockDIContainer = createMockDIContainer();
+    
+    // Validate that the container is properly initialized
+    if (!mockDIContainer) {
+      throw new Error('Failed to create mock DI container');
+    }
 
-    // Ensure all TYPES are bound
+    // Ensure all TYPES are properly bound
     Object.values(TYPES).forEach(type => {
       if (!mockDIContainer.isBound(type)) {
-        mockDIContainer.bind(type).toConstantValue({
-          on: vi.fn(),
-          off: vi.fn(),
-          emit: vi.fn(),
-        })
+        console.warn(`Type ${type.toString()} not bound. Skipping.`);
       }
-    })
+    });
   } catch (error) {
-    console.error('Failed to create mock DI container:', error)
-    mockDIContainer = null
+    console.error('Error in test setup:', error);
+    throw error;
   }
 })
 
 // Cleanup after each test
 afterEach(() => {
-  try {
-    // Reset the mock DI container
-    if (mockDIContainer) {
-      resetMockDIContainer(mockDIContainer)
+  if (mockDIContainer) {
+    try {
+      // Reset the mock container after each test
+      resetMockDIContainer(mockDIContainer);
+      mockDIContainer = null;
+    } catch (error) {
+      console.error('Error in test teardown:', error);
     }
-  } catch (error) {
-    console.error('Failed to reset mock DI container:', error)
   }
-  mockDIContainer = null
 })
 
 vi.mock("vscode", async (importOriginal) => {
@@ -52,10 +53,12 @@ vi.mock("vscode", async (importOriginal) => {
     return {
       event: (listener: (e: any) => any) => {
         listeners.push(listener)
-        return vi.fn()
+        return {
+          dispose: vi.fn()
+        }
       },
       fire: (e: any) => {
-        listeners.forEach((listener) => listener(e))
+        listeners.forEach(listener => listener(e))
       },
       dispose: vi.fn(),
     }
@@ -63,14 +66,12 @@ vi.mock("vscode", async (importOriginal) => {
 
   // Mock Uri
   const mockUri = {
-    scheme: "file",
-    authority: "",
-    path: "/mock/path",
-    query: "",
-    fragment: "",
-    fsPath: "/mock/path",
-    with: vi.fn().mockReturnThis(),
-    toString: vi.fn().mockReturnValue("/mock/path"),
+    fsPath: '/mock/path',
+    path: '/mock/path',
+    scheme: 'file',
+    authority: '',
+    fragment: '',
+    query: '',
   }
 
   return {

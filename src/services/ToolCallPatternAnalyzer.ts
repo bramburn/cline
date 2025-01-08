@@ -47,6 +47,11 @@ export class ToolCallPatternAnalyzer {
     const successfulPatterns = toolPatterns.filter(p => p.outcome.success);
     const successRate = successfulPatterns.length / toolPatterns.length;
     
+    console.log(`ToolName: ${toolName}`);
+    console.log(`Total Patterns: ${toolPatterns.length}`);
+    console.log(`Successful Patterns: ${successfulPatterns.length}`);
+    console.log(`Success Rate: ${successRate}`);
+
     const averageDuration = toolPatterns.reduce(
       (sum, p) => sum + p.outcome.duration, 
       0
@@ -59,7 +64,8 @@ export class ToolCallPatternAnalyzer {
       successRate,
       averageDuration,
       commonErrors,
-      suggestions
+      suggestions,
+      successfulPatterns: successfulPatterns.map(sp => JSON.stringify(sp.parameters))
     };
   }
 
@@ -190,11 +196,16 @@ export class ToolCallPatternAnalyzer {
       successRate: 0,
       averageDuration: 0,
       commonErrors: [],
-      suggestions: []
+      suggestions: [],
+      successfulPatterns: []
     };
   }
 
   public clearPatterns(): void {
+    this.patterns = [];
+  }
+
+  public clearAnalysis(): void {
     this.patterns = [];
   }
 

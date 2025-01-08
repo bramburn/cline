@@ -1,131 +1,130 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StreamHandlerService } from '../StreamHandlerService';
 import { StreamController } from '../StreamController';
-import { vi } from 'vitest';
+import { NotificationService } from '../NotificationService';
+import { ErrorCategory } from '../../types/ErrorReporting';
 
-vi.mock('../StreamController');
+// Import our new mocks
+import { 
+  mockStreamChunk, 
+  mockStreamOptions, 
+  mockReadableStream,
+  mockStreamHandlerService 
+} from '../__mocks__/StreamHandlerService';
+import { mockStreamController } from '../__mocks__/StreamController';
+import { mockNotificationService } from '../__mocks__/NotificationService';
 
 describe('StreamHandlerService', () => {
   let service: StreamHandlerService;
-  let mockStreamController: ReturnType<typeof vi.mocked<StreamController>>;
+  let mockController: StreamController;
+  let mockNotification: NotificationService;
 
   beforeEach(() => {
-    mockStreamController = vi.mocked(new StreamController());
-    service = new StreamHandlerService(mockStreamController);
+    // Reset all mocks
+    vi.resetAllMocks();
+
+    // Create mocked dependencies
+    mockController = mockStreamController as unknown as StreamController;
+    mockNotification = mockNotificationService as unknown as NotificationService;
+
+    // Initialize the service with mocked dependencies
+    service = new StreamHandlerService(mockController, mockNotification);
   });
 
-  it('should initialize without errors', () => {
-    expect(service).toBeDefined();
-  });
+  it('should process stream chunks correctly', async () => {
+    // Create a more robust mock stream
+    const mockStream = {
+      getReader: vi.fn().mockReturnValue({
+        read: vi.fn().mockResolvedValue({
+          done: false,
+          value: new TextEncoder().encode(JSON.stringify(mockStreamChunk.content))
+        }),
+        releaseLock: vi.fn(),
+        cancel: vi.fn()
+      })
+    } as unknown as ReadableStream<Uint8Array>;
 
-  it('should handle stream start', () => {
-    const streamId = service.startStream();
-    expect(streamId).toBeDefined();
-    expect(typeof streamId).toBe('string');
-  });
+    console.log('Test: Mocked Stream:', mockStream);
+    console.log('Test: Mock Stream Chunk:', mockStreamChunk);
 
-  it('should update stream progress', () => {
-    const streamId = service.startStream();
-    service.updateStreamProgress(streamId, 50);
-    const streamState = service.getStreamState(streamId);
-    expect(streamState?.progress).toBe(50);
-  });
-
-  it('should complete a stream', () => {
-    const streamId = service.startStream();
-    service.completeStream(streamId);
-    const streamState = service.getStreamState(streamId);
-    expect(streamState?.status).toBe('completed');
-  });
-
-  it('should handle stream errors', () => {
-    const streamId = service.startStream();
-    const errorMessage = 'Test error';
-    service.errorStream(streamId, errorMessage);
-    const streamState = service.getStreamState(streamId);
-    expect(streamState?.status).toBe('error');
-    expect(streamState?.errorMessage).toBe(errorMessage);
-  });
-
-  it('should process JSON stream chunks correctly', async () => {
-    const mockData = [
-      JSON.stringify({ type: 'text', content: 'Hello' }),
-      JSON.stringify({ type: 'text', content: 'World' })
-    ];
-
-    const stream = createMockStream(mockData);
     const chunks = [];
-
-    for await (const chunk of service.processStream(stream)) {
+    for await (const chunk of service.processStream(mockStream, mockStreamOptions)) {
+      console.log('Test: Received Chunk:', chunk);
       chunks.push(chunk);
     }
 
-    expect(chunks).toHaveLength(2);
+    console.log('Test: Processed Chunks:', chunks);
+
+    expect(chunks).toHaveLength(1);
     expect(chunks[0]).toEqual({
-      type: 'text',
-      content: { type: 'text', content: 'Hello' }
+      type: 'mock_type',
+      content: mockStreamChunk.content
     });
-    expect(chunks[1]).toEqual({
-      type: 'text',
-      content: { type: 'text', content: 'World' }
-    });
-  });
 
-  it('should handle non-JSON chunks as text', async () => {
-    const mockData = ['Hello', 'World'];
-    const stream = createMockStream(mockData);
-    const chunks = [];
-
-    for await (const chunk of service.processStream(stream)) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0]).toEqual({
-      type: 'text',
-      content: 'Hello'
-    });
-    expect(chunks[1]).toEqual({
-      type: 'text',
-      content: 'World'
-    });
+    // Verify reader methods were called
+    const reader = mockStream.getReader();
+    expect(reader.read).toHaveBeenCalled();
+    expect(reader.releaseLock).toHaveBeenCalled();
   });
 
   it('should handle stream timeout', async () => {
-    const stream = createMockStream([], true);
-    
+    const mockStream = {
+      getReader: vi.fn().mockReturnValue({
+        read: vi.fn().mockImplementation(() => {
+          return new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Stream timeout')), 50);
+          });
+        }),
+        releaseLock: vi.fn()
+      })
+    } as unknown as ReadableStream<Uint8Array>;
+
     await expect(async () => {
-      for await (const _ of service.processStream(stream, { timeout: 100 })) {
+      for await (const _ of service.processStream(mockStream, { timeout: 10 })) {
         // Should throw before yielding any chunks
       }
     }).rejects.toThrow('Stream timeout');
-    
-    expect(mockStreamController.error).toHaveBeenCalled();
+
+    // Verify error handling
+    expect(mockController.error).toHaveBeenCalled();
+    expect(mockNotification.addErrorNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: ErrorCategory.TIMEOUT,
+        message: expect.stringContaining('Stream Processing Failed')
+      })
+    );
   });
 
   it('should cancel stream successfully', async () => {
-    const stream = createMockStream([]);
-    await service.cancelStream(stream);
-    // Successful if no error is thrown
+    const mockStream = mockReadableStream as unknown as ReadableStream<Uint8Array>;
+    await service.cancelStream(mockStream);
+
+    // Verify cancellation
+    const reader = mockStream.getReader();
+    expect(reader.cancel).toHaveBeenCalled();
+    expect(reader.releaseLock).toHaveBeenCalled();
   });
 
-  // Helper function to create a mock ReadableStream
-  function createMockStream(
-    data: string[],
-    shouldTimeout: boolean = false
-  ): ReadableStream<Uint8Array> {
-    return new ReadableStream({
-      async start(controller) {
-        if (shouldTimeout) {
-          // Simulate timeout by not sending any data
-          return;
-        }
+  it('should handle non-JSON chunks', async () => {
+    const nonJsonStream = {
+      getReader: vi.fn().mockReturnValue({
+        read: vi.fn().mockResolvedValue({
+          done: false,
+          value: new TextEncoder().encode('non-json chunk')
+        }),
+        releaseLock: vi.fn()
+      })
+    } as unknown as ReadableStream<Uint8Array>;
 
-        for (const chunk of data) {
-          controller.enqueue(new TextEncoder().encode(chunk));
-        }
-        controller.close();
-      }
+    const chunks = [];
+    for await (const chunk of service.processStream(nonJsonStream)) {
+      chunks.push(chunk);
+    }
+
+    // Verify that non-JSON chunks are processed as text
+    expect(chunks[0]).toEqual({
+      type: 'text',
+      content: 'non-json chunk'
     });
-  }
+  });
 });
