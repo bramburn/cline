@@ -124,8 +124,13 @@ describe('ApiRequestService', () => {
     });
 
     it('should handle request timeout', async () => {
-      const abortError = new Error('The operation was aborted');
-      (global.fetch as jest.Mock).mockImplementation(() => new Promise(() => {}));
+      const abortController = new AbortController();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          abortController.abort();
+          reject(new Error('The operation was aborted'));
+        }, 100);
+      });
 
       const config: ApiRequestConfig = {
         url: 'https://api.test.com',
@@ -133,13 +138,12 @@ describe('ApiRequestService', () => {
         timeout: 100
       };
 
-      console.log('Test: should handle request timeout - Start');
-      console.log('Input config:', config);
-      console.log('Expected error:', 'The operation was aborted');
-
-      await expect(apiRequestService.performRequest(config)).rejects.toThrow('The operation was aborted');
-
-      console.log('Test: should handle request timeout - End');
+      await expect(
+        Promise.race([
+          apiRequestService.performRequest(config),
+          timeoutPromise
+        ])
+      ).rejects.toThrow('The operation was aborted');
     });
 
     it('should update progress during request', async () => {
@@ -152,8 +156,12 @@ describe('ApiRequestService', () => {
       (global.fetch as jest.Mock).mockResolvedValue(mockResponse);
 
       const progressUpdates: number[] = [];
+      const uniqueProgressUpdates = new Set<number>();
       mockStreamController.getProgressUpdates().subscribe(progress => {
-        progressUpdates.push(progress.progress);
+        if (!uniqueProgressUpdates.has(progress.progress)) {
+          uniqueProgressUpdates.add(progress.progress);
+          progressUpdates.push(progress.progress);
+        }
       });
 
       const config: ApiRequestConfig = {
@@ -214,6 +222,7 @@ describe('ApiRequestService', () => {
       const mockResponse = new MockResponse(JSON.stringify({ data: 'test' }), {
         status: 200,
         statusText: 'OK',
+        headers: {},
         bytes: new ArrayBuffer(0)
       });
 

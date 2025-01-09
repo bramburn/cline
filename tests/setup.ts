@@ -8,6 +8,29 @@ import { TYPES } from '../src/core/di/types'
 
 let mockDIContainer: Container | null = null
 
+// Create a more robust mock event emitter
+const createMockEventEmitter = () => {
+  const listeners: Array<(e: any) => void> = [];
+  return {
+    event: (listener: (e: any) => void) => {
+      listeners.push(listener);
+      return {
+        dispose: () => {
+          const index = listeners.indexOf(listener);
+          if (index !== -1) {
+            listeners.splice(index, 1);
+          }
+        }
+      };
+    },
+    fire: (e: any) => {
+      listeners.forEach(listener => listener(e));
+    },
+    listeners: () => listeners,
+    dispose: vi.fn()
+  };
+};
+
 // Setup before each test
 beforeEach(() => {
   try {
@@ -46,23 +69,6 @@ afterEach(() => {
 
 vi.mock("vscode", async (importOriginal) => {
   const actualVscode = await importOriginal<typeof import("vscode")>()
-
-  // Mock EventEmitter
-  const createMockEventEmitter = () => {
-    const listeners: Array<(e: any) => any> = []
-    return {
-      event: (listener: (e: any) => any) => {
-        listeners.push(listener)
-        return {
-          dispose: vi.fn()
-        }
-      },
-      fire: (e: any) => {
-        listeners.forEach(listener => listener(e))
-      },
-      dispose: vi.fn(),
-    }
-  }
 
   // Mock Uri
   const mockUri = {
@@ -105,11 +111,7 @@ vi.mock("vscode", async (importOriginal) => {
         .mockImplementation(async <T>(command: string, ...rest: any[]): Promise<T | undefined> => undefined),
       getCommands: vi.fn().mockResolvedValue([]),
     },
-    EventEmitter: vi.fn().mockImplementation(() => ({
-      event: vi.fn(),
-      fire: vi.fn(),
-      dispose: vi.fn(),
-    })),
+    EventEmitter: createMockEventEmitter(),
     window: {
       ...actualVscode.window,
       activeTextEditor: undefined,
@@ -223,22 +225,25 @@ vi.mock("p-wait-for", () => {
     default: vi.fn(
       (conditionFn: () => boolean | Promise<boolean>, options?: { timeout?: number; interval?: number }) => {
         const { timeout = 4000, interval = 100 } = options || {}
-        let elapsed = 0
-
         return new Promise((resolve, reject) => {
-          const intervalId = setInterval(async () => {
-            elapsed += interval
-
-            if (await conditionFn()) {
-              clearInterval(intervalId)
-              resolve(true)
-            } else if (elapsed >= timeout) {
-              clearInterval(intervalId)
-              reject(new Error("Timeout exceeded"))
+          const startTime = Date.now();
+          const checkCondition = async () => {
+            try {
+              const result = await conditionFn();
+              if (result) {
+                resolve(result);
+              } else if (Date.now() - startTime > timeout) {
+                reject(new Error('Timeout'));
+              } else {
+                setTimeout(checkCondition, interval);
+              }
+            } catch (error) {
+              reject(error);
             }
-          }, interval)
-        })
-      },
-    ),
-  }
+          };
+          checkCondition();
+        });
+      }
+    )
+  };
 })

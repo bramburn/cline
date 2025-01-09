@@ -45,7 +45,7 @@ export class ApiRequestMetrics {
   }
 
   public getMetricsSummary(): MetricsSummary {
-    const completedMetrics = this.metrics.filter(m => m.endTime !== undefined);
+    const completedMetrics = this.metrics.filter(m => m.duration !== undefined);
     const successfulMetrics = completedMetrics.filter(m => m.success);
     
     const totalDuration = completedMetrics.reduce((sum, metric) => 

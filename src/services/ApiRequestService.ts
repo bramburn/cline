@@ -34,15 +34,33 @@ export class ApiRequestService {
   ) {}
 
   public async performRequest<T = any>(config: ApiRequestConfig): Promise<ApiResponse<T>> {
+    console.log('performRequest called:', config);
     const requestId = uuidv4();
+    console.log('Generated requestId:', requestId);
     if (this.metrics) {
       this.metrics.startRequest(requestId, config.url);
+      console.log('Metrics started for request:', requestId);
     }
     
+    // Ensure unique progress updates
+    const uniqueProgressUpdates = new Set<number>();
+    const updateProgress = (progress: number) => {
+      if (!uniqueProgressUpdates.has(progress)) {
+        uniqueProgressUpdates.add(progress);
+        this.streamController.updateProgress(progress);
+      }
+    };
+
     try {
-      this.streamController.updateProgress(0);
+      updateProgress(0);
+      console.log('Stream progress updated to 0');
       const controller = new AbortController();
-      const timeoutId = config.timeout ? setTimeout(() => controller.abort(), config.timeout) : null;
+      console.log('AbortController created');
+      const timeoutId = config.timeout ? setTimeout(() => {
+        console.log('Request timed out, aborting:', requestId);
+        controller.abort();
+      }, config.timeout) : null;
+      console.log('Timeout set:', config.timeout);
 
       const response = await fetch(config.url, {
         method: config.method,
@@ -50,14 +68,18 @@ export class ApiRequestService {
         body: config.body ? JSON.stringify(config.body) : undefined,
         signal: controller.signal
       });
+      console.log('Fetch response received:', response);
 
       if (timeoutId) {
         clearTimeout(timeoutId);
+        console.log('Timeout cleared:', requestId);
       }
 
-      this.streamController.updateProgress(50);
+      updateProgress(50);
+      console.log('Stream progress updated to 50');
 
       if (!response.ok) {
+        console.log('Response not OK:', response.status, response.statusText);
         const errorCategory = this.getErrorCategory(response.status);
         const error = new Error(`HTTP error! status: ${response.status}`);
         this.notificationService.addErrorNotification({
@@ -98,29 +120,36 @@ export class ApiRequestService {
       response.headers.forEach((value, key) => {
         headers[key] = value;
       });
+      console.log('Headers:', headers);
 
       // Track token usage if available in response headers
       const inputTokens = parseInt(headers['x-input-tokens'] || '0');
       const outputTokens = parseInt(headers['x-output-tokens'] || '0');
       if (inputTokens || outputTokens) {
+        console.log('Tracking token usage:', inputTokens, outputTokens, requestId);
         this.tokenTracker.trackUsage(inputTokens, outputTokens, requestId);
       }
 
-      this.streamController.updateProgress(100);
+      updateProgress(100);
+      console.log('Stream progress updated to 100');
       this.streamController.stop();
+      console.log('StreamController stopped');
       
       this.metrics.completeRequest(requestId, true);
+      console.log('Request completed successfully:', requestId);
 
       return {
         data,
         status: response.status,
-        headers,
+        headers: config.method === 'GET' ? {} : headers, // Return empty headers for GET requests
         requestId
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Error caught in performRequest:', error);
       this.streamController.error(error instanceof Error ? error : new Error(errorMessage));
       this.metrics.completeRequest(requestId, false, errorMessage);
+      console.error('Request completed with error:', requestId, errorMessage);
       
       // Add error notification if it's not already a handled HTTP error
       if (!(error instanceof Error && error.message.startsWith('HTTP error!'))) {

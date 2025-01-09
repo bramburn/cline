@@ -156,6 +156,7 @@
 		"@types/jasmine": "^5.1.5",
 		"@types/jest": "^29.5.14",
 		"@types/node": "^22.10.5",
+		"@types/react": "^19.0.3",
 		"@types/should": "^11.2.0",
 		"@types/vscode": "^1.84.0",
 		"@typescript-eslint/eslint-plugin": "^8.0.0",
@@ -172,7 +173,9 @@
 		"prettier": "^3.3.3",
 		"ts-jest": "^29.2.5",
 		"typescript": "^5.6.0",
-		"vitest": "^1.6.0"
+		"vitest": "^1.6.0",
+		"web-tree-sitter": "^0.22.6",
+		"zod": "^3.23.8"
 	},
 	"dependencies": {
 		"@anthropic-ai/bedrock-sdk": "^0.10.2",
@@ -200,6 +203,7 @@
 		"get-folder-size": "^5.0.0",
 		"globby": "^14.0.2",
 		"inversify": "^6.0.2",
+		"inversify-react": "^1.2.0",
 		"isbinaryfile": "^5.0.2",
 		"jasmine": "^5.5.0",
 		"mammoth": "^1.8.0",
@@ -223,5 +227,12 @@
 		"vitest": "^2.1.8",
 		"web-tree-sitter": "^0.22.6",
 		"zod": "^3.23.8"
+	},
+	"vitest": {
+		"environment": "node",
+		"globals": true,
+		"include": [
+			"src/**/*.{test,spec}.{js,ts}"
+		]
 	}
 }

@@ -3,6 +3,9 @@ import { APIConfiguration } from '../../../src/services/APIConfigurationService'
 import { CustomInstruction } from '../../../src/services/CustomInstructionsService';
 
 interface ExtensionState {
+	didHydrateState: boolean;
+	showWelcome: boolean;
+	shouldShowAnnouncement: boolean;
 	apiConfiguration: APIConfiguration;
 	customInstructions: CustomInstruction[];
 	mcpServers: string[];
@@ -13,12 +16,18 @@ interface ExtensionState {
 	setMcpServers: (value: string[]) => void;
 	setFilePaths: (value: string[]) => void;
 	setShowAnnouncement: (value: boolean) => void;
+	setDidHydrateState: (value: boolean) => void;
+	setShowWelcome: (value: boolean) => void;
+	setShouldShowAnnouncement: (value: boolean) => void;
 }
 
 const ExtensionStateContext = createContext<ExtensionState | undefined>(undefined);
 
 export const ExtensionStateProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-	const [state, setState] = useState<Omit<ExtensionState, 'setApiConfiguration' | 'setCustomInstructions' | 'setMcpServers' | 'setFilePaths' | 'setShowAnnouncement'>>({
+	const [state, setState] = useState<Omit<ExtensionState, 'setApiConfiguration' | 'setCustomInstructions' | 'setMcpServers' | 'setFilePaths' | 'setShowAnnouncement' | 'setDidHydrateState' | 'setShowWelcome' | 'setShouldShowAnnouncement'>>({
+		didHydrateState: false,
+		showWelcome: true,
+		shouldShowAnnouncement: false,
 		apiConfiguration: {
 			selectedModel: 'gpt-3.5-turbo',
 			models: [
@@ -69,6 +78,21 @@ export const ExtensionStateProvider: React.FC<{ children: ReactNode }> = ({ chil
 				setState((prevState) => ({
 					...prevState,
 					showAnnouncement: value,
+				})),
+			setDidHydrateState: (value) =>
+				setState((prevState) => ({
+					...prevState,
+					didHydrateState: value,
+				})),
+			setShowWelcome: (value) =>
+				setState((prevState) => ({
+					...prevState,
+					showWelcome: value,
+				})),
+			setShouldShowAnnouncement: (value) =>
+				setState((prevState) => ({
+					...prevState,
+					shouldShowAnnouncement: value,
 				})),
 		}}>
 			{children}

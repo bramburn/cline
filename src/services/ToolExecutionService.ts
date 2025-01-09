@@ -1,18 +1,10 @@
 import { Observable, from, of, throwError } from 'rxjs';
-import { catchError, concatMap, finalize } from 'rxjs/operators';
-import { ToolCallOptimizationAgent } from '../core/agents/ToolCallOptimizationAgent';
+import { catchError, finalize } from 'rxjs/operators';
 import { ExtensionMessage } from '../shared/ExtensionMessage';
 
 export class ToolExecutionService {
-  private toolCallOptimizationAgent: ToolCallOptimizationAgent;
-
-  constructor(toolCallOptimizationAgent?: ToolCallOptimizationAgent) {
-    this.toolCallOptimizationAgent = 
-      toolCallOptimizationAgent || new ToolCallOptimizationAgent();
-  }
-
   /**
-   * Execute a tool with optimization and return an Observable
+   * Execute a tool and return an Observable
    * @param tool The tool to execute
    * @param message The extension message context
    * @returns Observable of tool execution result
@@ -21,40 +13,34 @@ export class ToolExecutionService {
     tool: any, 
     message: ExtensionMessage
   ): Observable<any> {
-    return from(this.executeToolWithRetry(tool, message)).pipe(
-      concatMap(result => of(result)),
+    return from(this.executeTool(tool, message)).pipe(
       catchError(error => {
         console.error('Tool execution error:', error);
         return throwError(() => error);
       }),
       finalize(() => {
-        // Cleanup or logging can be added here
         console.log('Tool execution completed');
       })
     );
   }
 
   /**
-   * Private method to execute tool with potential retries
+   * Private method to execute tool
    * @param tool The tool to execute
    * @param message The extension message context
    * @returns Promise resolving to tool execution result
    */
-  private async executeToolWithRetry(
+  private async executeTool(
     tool: any, 
     message: ExtensionMessage
   ): Promise<any> {
     try {
-      // Optimize tool call before execution
-      const optimizedTool = await this.toolCallOptimizationAgent.optimizeTool(tool);
-      
-      // Execute the optimized tool
+      // Direct tool execution without optimization
       const result = await tool.execute(message);
-      
       return result;
     } catch (error) {
       console.error('Error in tool execution:', error);
       throw error;
     }
   }
-} 
+}

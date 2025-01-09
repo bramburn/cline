@@ -27,12 +27,12 @@ const fs = require("fs")
 // Get all files in the shared directory
 const sharedDir = path.resolve(__dirname, "..", "..", "src", "shared")
 
-function getAllFiles(dir) {
+function getAllFiles(dir, manualFiles = []) {
 	let files = []
 	fs.readdirSync(dir).forEach((file) => {
 		const filePath = path.join(dir, file)
 		if (fs.statSync(filePath).isDirectory()) {
-			files = files.concat(getAllFiles(filePath))
+			files = files.concat(getAllFiles(filePath, manualFiles))
 		} else {
 			// Skip test files
 			if (!file.endsWith(".test.ts")) {
@@ -41,9 +41,21 @@ function getAllFiles(dir) {
 			}
 		}
 	})
+	// Include manually specified files
+	manualFiles.forEach((manualFile) => {
+		if (fs.existsSync(manualFile)) {
+			files.push(manualFile)
+		}
+	})
 	return files
 }
-const sharedFiles = getAllFiles(sharedDir)
+
+const manualFiles = [
+	path.resolve(__dirname, "..", "..", "src", "services", "NotificationService"),
+	// Add other manual files here as needed
+]
+
+const sharedFiles = getAllFiles(sharedDir, manualFiles)
 // config.resolve.plugins = config.resolve.plugins.filter((plugin) => !(plugin instanceof ModuleScopePlugin))
 // Instead of excluding the whole ModuleScopePlugin, we just whitelist specific files that can be imported from outside src.
 config.resolve.plugins.forEach((plugin) => {
