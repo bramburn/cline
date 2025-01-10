@@ -18,8 +18,12 @@
 		"strict": true,
 		"target": "es2022",
 		"useDefineForClassFields": true,
-		"useUnknownInCatchVariables": false
+		"useUnknownInCatchVariables": false,
+		"types": ["node", "vscode"],
+		"typeRoots": ["./node_modules/@types", "./node_modules/vscode/vscode.d.ts", "./"],
+		
+		"skipDefaultLibCheck": true,
 	},
 	"include": ["src/**/*", "scripts/**/*"],
-	"exclude": ["node_modules", ".vscode-test", "webview-ui"]
+	"exclude": ["node_modules", "dist", "out", "**/*.test.ts", "**/*.spec.ts"]
 }
