@@ -81,9 +81,14 @@ export class Cline {
 	private consecutiveMistakeCount: number = 0
 	private providerRef: WeakRef<ClineProvider>
 	private abort: boolean = false
-	didFinishAborting = false
+	didFinishAborting = falsec
 	abandoned = false
 	private diffViewProvider: DiffViewProvider
+	private presentMultifileDiff: boolean = false;
+	private isInitialized: boolean = false;
+	private isStreaming: boolean = false;
+	private didFinishAbortingStream: boolean = false;
+	private checkpointTrackerErrorMessage: string | null = null;
 
 	// streaming
 	private currentStreamingContentIndex = 0
@@ -933,7 +938,7 @@ export class Cline {
 					// (have to do this for partial and complete since sending content in thinking tags to markdown renderer will automatically be removed)
 					// Remove end substrings of <thinking or </thinking (below xml parsing is only for opening tags)
 					// (this is done with the xml parsing below now, but keeping here for reference)
-					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?$/, "")
+					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?$/, "")
 					// Remove all instances of <thinking> (with optional line break after) and </thinking> (with optional line break before)
 					// - Needs to be separate since we dont want to remove the line break before the first tag
 					// - Needs to happen before the xml parsing below
@@ -2768,5 +2773,10 @@ export class Cline {
 		}
 
 		return `<environment_details>\n${details.trim()}\n</environment_details>`
+	}
+
+	async restoreCheckpoint(): Promise<void> {
+		// Implementation will be added later
+		return Promise.resolve();
 	}
 }
